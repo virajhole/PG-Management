@@ -80,4 +80,15 @@ export const KEYS = {
   settings: 'pgm.settings.v1',
   session: 'pgm.session.v1',
   seeded: 'pgm.seeded.v1',
+  // --- ledger collections (schema v2) ---
+  cycles: 'pgm.cycles.v2',
+  lightBills: 'pgm.lightBills.v2',
+  transactions: 'pgm.transactions.v2',
+  schemaVersion: 'pgm.schemaVersion',
+  // Raw copy of the pre-ledger data, written once by the migration so an
+  // upgrade can always be inspected or rolled back by hand.
+  backup: 'pgm.backup.v1',
 };
+
+/** Bump when a migration is added; `migrationService` runs anything above the stored value. */
+export const SCHEMA_VERSION = 2;

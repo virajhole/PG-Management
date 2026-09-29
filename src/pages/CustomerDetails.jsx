@@ -8,6 +8,7 @@ import ReminderButton from '../components/ReminderButton.jsx';
 import ImagePicker from '../components/ImagePicker.jsx';
 import ImageViewer from '../components/ImageViewer.jsx';
 import PaymentDialog from '../components/PaymentDialog.jsx';
+import LightBillDialog from '../components/LightBillDialog.jsx';
 import { ConfirmDialog } from '../components/Modal.jsx';
 import { TextField, Textarea, SelectField } from '../components/FormFields.jsx';
 import { AmountField } from '../components/AmountField.jsx';
@@ -17,19 +18,21 @@ import {
   EditIcon,
   TrashIcon,
   CheckIcon,
+  BoltIcon,
   PhoneIcon,
   IdCardIcon,
   UserPlusIcon,
-  MessageIcon,
 } from '../components/icons.jsx';
 import { useData } from '../context/DataContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
-import { customerService } from '../services/index.js';
 import { useImageUrl } from '../hooks/useImageUrl.js';
 import { customerEditSchema, PROOF_TYPES, sanitiseAadhaar, sanitisePan, sanitiseMobile, getProofHint } from '../utils/validation.js';
-import { formatCurrency, formatDate, getAge } from '../utils/format.js';
-import { getCycleStart, todayISO, toDateInput } from '../utils/dateLogic.js';
+import { formatCurrency, formatRupees, formatDate, getAge } from '../utils/format.js';
+import { todayISO, toDateInput, dayjs } from '../utils/dateLogic.js';
+import { getRemaining, getPaidPercent, TX_LIGHT_BILL } from '../utils/ledger.js';
 import { SHARING_TYPES } from '../services/index.js';
+
+const MODE_LABEL = { cash: 'Cash', upi: 'UPI', bank: 'Bank transfer' };
 
 function DetailRow({ label, value, mono = false }) {
   return (
@@ -311,14 +314,29 @@ export default function CustomerDetails() {
   const { id } = useParams();
   const navigate = useNavigate();
   const toast = useToast();
-  const { customers, status, today, deleteCustomer, addPayment, removePayment } = useData();
+  const {
+    customers,
+    cycles,
+    lightBills,
+    transactions,
+    openCycleByCustomer,
+    status,
+    today,
+    deleteCustomer,
+    recordRentPayment,
+    recordLightBillPayment,
+    saveLightBill,
+    deleteTransaction,
+  } = useData();
 
   const [editing, setEditing] = useState(false);
   const [viewingImage, setViewingImage] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [payOpen, setPayOpen] = useState(false);
+  const [payTarget, setPayTarget] = useState(null);
+  const [billOpen, setBillOpen] = useState(false);
+  const [existingBill, setExistingBill] = useState(null);
+  const [deletingTx, setDeletingTx] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [deletingPayment, setDeletingPayment] = useState(null);
 
   const customer = useMemo(() => customers.find((c) => c.id === id) ?? null, [customers, id]);
 
@@ -326,14 +344,77 @@ export default function CustomerDetails() {
     setEditing(false);
   }, [id]);
 
+  const cycle = openCycleByCustomer.get(id) ?? null;
+  const rentRemaining = getRemaining(cycle);
+
+  const cycleHistory = useMemo(
+    () =>
+      cycles
+        .filter((c) => c.customerId === id)
+        .sort((a, b) => (a.dueDate < b.dueDate ? 1 : -1)),
+    [cycles, id],
+  );
+
+  const bills = useMemo(
+    () =>
+      lightBills
+        .filter((b) => b.customerId === id)
+        .sort((a, b) => (a.month < b.month ? 1 : -1)),
+    [lightBills, id],
+  );
+
+  const customerTx = useMemo(
+    () =>
+      transactions
+        .filter((tx) => tx.customerId === id)
+        .sort((a, b) => (a.date < b.date ? 1 : -1)),
+    [transactions, id],
+  );
+
+  const totalReceived = customerTx.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
+  const lightRemaining = bills.reduce((sum, b) => sum + getRemaining(b), 0);
+
   async function handlePay(payment) {
     setSaving(true);
     try {
-      const { customer: updated } = await addPayment(customer.id, payment);
-      toast.success(`Payment recorded. Next rent due ${formatDate(updated.nextDueDate)}.`);
-      setPayOpen(false);
+      if (payment.kind === 'bill') {
+        const { bill } = await recordLightBillPayment({
+          customerId: customer.id,
+          billId: payTarget.bill.id,
+          amount: payment.amount,
+          date: payment.date,
+          mode: payment.mode,
+          note: payment.note,
+        });
+        toast.success(`Light bill updated. ${formatRupees(getRemaining(bill))} left.`);
+      } else {
+        const { transaction, nextCycle } = await recordRentPayment({
+          customerId: customer.id,
+          amount: payment.amount,
+          date: payment.date,
+          mode: payment.mode,
+          note: payment.note,
+        });
+        const opened = nextCycle ? ` Next cycle due ${formatDate(nextCycle.dueDate)}.` : ' The due date is unchanged.';
+        toast.success(`${formatRupees(transaction.amount)} recorded.${opened}`);
+      }
+      setPayTarget(null);
     } catch (error) {
       toast.error(error.message || 'Could not record that payment.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleSaveBill(bill) {
+    setSaving(true);
+    try {
+      const saved = await saveLightBill(bill);
+      toast.success(`Light bill ${formatRupees(saved.billAmount)} saved for ${saved.month}.`);
+      setBillOpen(false);
+      setExistingBill(null);
+    } catch (error) {
+      toast.error(error.message || 'Could not save that bill.');
     } finally {
       setSaving(false);
     }
@@ -354,14 +435,22 @@ export default function CustomerDetails() {
     }
   }
 
-  async function handleDeletePayment() {
+  async function handleDeleteTx() {
+    if (!deletingTx) return;
+    setSaving(true);
     try {
-      await removePayment(customer.id, deletingPayment.id);
-      toast.success('Payment entry deleted.');
-      setDeletingPayment(null);
+      await deleteTransaction(deletingTx.id);
+      toast.success('Transaction deleted and balances restored.');
+      setDeletingTx(null);
     } catch (error) {
-      toast.error(error.message || 'Could not delete that payment.');
+      toast.error(error.message || 'Could not delete that transaction.');
+    } finally {
+      setSaving(false);
     }
+  }
+
+  function openPayBill(bill) {
+    setPayTarget({ kind: 'bill', customer, bill });
   }
 
   if (status === 'loading') {
@@ -387,10 +476,7 @@ export default function CustomerDetails() {
     );
   }
 
-  const rentStatus = customerService.getCustomerStatus(customer, today);
-  const cycleStart = getCycleStart(customer.nextDueDate, customer.dueDay);
-  const payments = [...customer.payments].sort((a, b) => (a.date < b.date ? 1 : -1));
-  const totalPaid = payments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+  const overdue = getRemaining(cycle) > 0 && today.diff(dayjs(customer.nextDueDate), 'day') > 0;
 
   return (
     <div className="mx-auto max-w-4xl space-y-4 pb-4">
@@ -411,7 +497,7 @@ export default function CustomerDetails() {
                   {customer.code} · {customer.sharingType} sharing · {getAge(customer.joiningDate)} at PG
                 </p>
               </div>
-              <StatusBadge customer={customer} today={today} />
+              <StatusBadge customer={customer} today={today} cycle={cycle} />
             </div>
 
             <div className="mt-3 flex flex-wrap gap-2">
@@ -419,19 +505,31 @@ export default function CustomerDetails() {
                 <PhoneIcon className="size-4" />
                 Call
               </a>
-              <ReminderButton customer={customer} className="btn-secondary min-h-10 px-3 text-xs" label="Send reminder" />
+              <ReminderButton customer={customer} remaining={rentRemaining} className="btn-secondary min-h-10 px-3 text-xs" label="Send reminder" />
               <button
                 type="button"
-                onClick={() => setPayOpen(true)}
+                onClick={() => setPayTarget({ kind: 'rent', customer, cycle })}
                 className="btn-primary min-h-10 px-3 text-xs"
               >
                 <CheckIcon className="size-4" />
-                Mark as Paid
+                Record payment
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setExistingBill(bills.find((b) => b.month === currentMonthKey(today)) ?? null);
+                  setBillOpen(true);
+                }}
+                className="btn-secondary min-h-10 px-3 text-xs"
+              >
+                <BoltIcon className="size-4" />
+                {bills.some((b) => b.month === currentMonthKey(today)) ? 'Edit this month bill' : 'Add light bill'}
               </button>
             </div>
           </div>
         </div>
 
+        {/* The sharing card / balance strip the tenant cares about. */}
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div className="rounded-xl bg-slate-50 p-3">
             <p className="text-[11px] text-slate-500">Monthly rent</p>
@@ -441,6 +539,12 @@ export default function CustomerDetails() {
             <p className="text-[11px] text-slate-500">Next rent due</p>
             <p className="mt-0.5 text-sm font-bold text-slate-900">{formatDate(customer.nextDueDate)}</p>
           </div>
+          <div className={`rounded-xl p-3 ${rentRemaining > 0 ? 'bg-red-50' : 'bg-emerald-50'}`}>
+            <p className="text-[11px] text-slate-500">Balance on sharing card</p>
+            <p className={`mt-0.5 text-sm font-bold ${rentRemaining > 0 ? 'text-red-700' : 'text-emerald-700'}`}>
+              {formatRupees(rentRemaining)}
+            </p>
+          </div>
           <div className="rounded-xl bg-slate-50 p-3">
             <p className="text-[11px] text-slate-500">Deposit</p>
             <p className="mt-0.5 text-sm font-bold text-slate-900">
@@ -448,15 +552,29 @@ export default function CustomerDetails() {
               {customer.depositPaid ? ' ✓' : ''}
             </p>
           </div>
-          <div className="rounded-xl bg-slate-50 p-3">
-            <p className="text-[11px] text-slate-500">Total received</p>
-            <p className="mt-0.5 text-sm font-bold text-slate-900">{formatCurrency(totalPaid)}</p>
-          </div>
         </div>
 
-        {rentStatus === 'overdue' && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {customer.advanceCredit > 0 && (
+            <span className="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
+              Advance credit {formatRupees(customer.advanceCredit)}
+            </span>
+          )}
+          {lightRemaining > 0 && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700">
+              <BoltIcon className="size-3.5" />
+              Electricity due {formatRupees(lightRemaining)}
+            </span>
+          )}
+          <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+            {formatRupees(totalReceived)} received all-time
+          </span>
+        </div>
+
+        {overdue && (
           <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-sm font-medium text-red-800">
-            Rent is overdue. Recording a payment will move the due date forward one month.
+            Rent is overdue with a balance of {formatRupees(rentRemaining)}. A partial payment will reduce it
+            without moving the due date; settling in full opens the next month.
           </p>
         )}
       </div>
@@ -512,35 +630,173 @@ export default function CustomerDetails() {
         </div>
       )}
 
-      {/* ------------------------------------------------- payment history */}
+      {/* --------------------------------------------------- rent cycle history */}
       <div className="card p-4 sm:p-5">
         <div className="mb-3 flex items-center justify-between gap-3">
           <h2 className="text-sm font-semibold text-slate-900">
-            Payment history
-            {payments.length > 0 && (
-              <span className="ml-1.5 font-normal text-slate-400">({payments.length})</span>
-            )}
+            Rent cycles
+            <span className="ml-1.5 font-normal text-slate-400">({cycleHistory.length})</span>
           </h2>
-          <p className="text-xs text-slate-500">
-            Billing cycle from {formatDate(cycleStart)}
-          </p>
+          {cycle && <p className="text-xs text-slate-500">Next due {formatDate(customer.nextDueDate)}</p>}
         </div>
 
-        {payments.length === 0 ? (
+        {cycleHistory.length === 0 ? (
           <EmptyState
-            icon={MessageIcon}
-            title="No payments recorded yet"
-            message="Once rent is collected, every entry will appear here with its amount, date and mode."
+            icon={CheckIcon}
+            title="No rent cycles yet"
+            message="The open cycle appears here the moment the first payment is recorded."
+          />
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {cycleHistory.map((c) => {
+              const remaining = getRemaining(c);
+              const percent = getPaidPercent(c);
+              return (
+                <li key={c.id} className="py-3">
+                  <div className="flex items-center gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-baseline justify-between gap-1">
+                        <p className="text-sm font-semibold text-slate-900">
+                          {formatCurrency(c.rentAmount)} <span className="font-normal text-slate-400">· due {formatDate(c.dueDate)}</span>
+                        </p>
+                        <span
+                          className={`text-xs font-semibold ${
+                            remaining <= 0 ? 'text-emerald-600' : c.paidAmount > 0 ? 'text-amber-600' : 'text-red-600'
+                          }`}
+                        >
+                          {remaining <= 0 ? 'Paid' : `${formatRupees(remaining)} left`}
+                        </span>
+                      </div>
+                      <div className="mt-1.5 flex items-center gap-2">
+                        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100">
+                          <div
+                            className={`h-full rounded-full ${percent >= 100 ? 'bg-emerald-500' : percent > 0 ? 'bg-amber-500' : 'bg-slate-200'}`}
+                            style={{ width: `${Math.min(100, percent)}%` }}
+                          />
+                        </div>
+                        <span className="text-[11px] text-slate-400 tabular-nums">{percent}%</span>
+                      </div>
+                    </div>
+                    {getRemaining(c) > 0 && c.id === cycle?.id && (
+                      <button
+                        type="button"
+                        onClick={() => setPayTarget({ kind: 'rent', customer, cycle: c })}
+                        className="btn-secondary min-h-9 px-2.5 text-xs"
+                      >
+                        Pay
+                      </button>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
+      {/* ---------------------------------------------------- light bill history */}
+      <div className="card p-4 sm:p-5">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-slate-900">
+            Light bills
+            <span className="ml-1.5 font-normal text-slate-400">({bills.length})</span>
+          </h2>
+          <button
+            type="button"
+            className="btn-ghost text-brand-700"
+            onClick={() => {
+              setExistingBill(bills.find((b) => b.month === currentMonthKey(today)) ?? null);
+              setBillOpen(true);
+            }}
+          >
+            <BoltIcon className="size-4" />
+            {bills.some((b) => b.month === currentMonthKey(today)) ? 'Edit bill' : 'Add bill'}
+          </button>
+        </div>
+
+        {bills.length === 0 ? (
+          <EmptyState
+            icon={BoltIcon}
+            title="No electricity bills yet"
+            message="Add a light bill to track this tenant's electricity separately from rent."
             action={
-              <button type="button" className="btn-primary" onClick={() => setPayOpen(true)}>
-                <CheckIcon className="size-4" />
-                Record first payment
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => {
+                  setExistingBill(null);
+                  setBillOpen(true);
+                }}
+              >
+                <BoltIcon className="size-4" />
+                Add light bill
               </button>
             }
           />
         ) : (
           <ul className="divide-y divide-slate-100">
-            {payments.map((payment) => (
+            {bills.map((bill) => {
+              const remaining = getRemaining(bill);
+              return (
+                <li key={bill.id} className="flex items-center gap-3 py-3">
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-amber-50 text-amber-600">
+                    <BoltIcon className="size-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-slate-900">{formatBillMonth(bill.month)} · {formatRupees(bill.billAmount)}</p>
+                    <p className="truncate text-xs text-slate-500">
+                      {bill.units != null ? `${bill.units} units` : ''}
+                      {bill.ratePerUnit != null ? ` x Rs ${bill.ratePerUnit}` : ''}
+                      {bill.note ? ` · ${bill.note}` : ''}
+                      {remaining > 0 ? ` · ${formatRupees(remaining)} pending` : ' · paid'}
+                    </p>
+                  </div>
+                  {remaining > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => openPayBill(bill)}
+                      className="btn-secondary min-h-9 px-2.5 text-xs"
+                    >
+                      Pay {formatRupees(remaining)}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExistingBill(bill);
+                      setBillOpen(true);
+                    }}
+                    className="flex size-10 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+                    aria-label={`Edit ${formatBillMonth(bill.month)} bill`}
+                  >
+                    <EditIcon className="size-4" />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
+      {/* ------------------------------------------------- payment history */}
+      <div className="card p-4 sm:p-5">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-slate-900">
+            Payment history
+            <span className="ml-1.5 font-normal text-slate-400">({customerTx.length})</span>
+          </h2>
+          <p className="text-xs text-slate-500">{formatRupees(totalReceived)} received in total</p>
+        </div>
+
+        {customerTx.length === 0 ? (
+          <EmptyState
+            icon={CheckIcon}
+            title="No payments recorded yet"
+            message="Once rent is collected, every entry will appear here with its amount, date, mode and note."
+          />
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {customerTx.map((payment) => (
               <li key={payment.id} className="flex items-center gap-3 py-3">
                 <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
                   <CheckIcon className="size-5" />
@@ -548,13 +804,14 @@ export default function CustomerDetails() {
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-slate-900">{formatCurrency(payment.amount)}</p>
                   <p className="truncate text-xs text-slate-500">
-                    {formatDate(payment.date)} · {payment.mode === 'upi' ? 'UPI' : payment.mode === 'bank' ? 'Bank transfer' : 'Cash'}
+                    {formatDate(payment.date)} · {MODE_LABEL[payment.mode] ?? payment.mode} ·{' '}
+                    {payment.type === TX_LIGHT_BILL ? 'Light bill' : 'Rent'}
                     {payment.note ? ` · ${payment.note}` : ''}
                   </p>
                 </div>
                 <button
                   type="button"
-                  onClick={() => setDeletingPayment(payment)}
+                  onClick={() => setDeletingTx(payment)}
                   className="flex size-10 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600"
                   aria-label={`Delete payment of ${formatCurrency(payment.amount)} on ${formatDate(payment.date)}`}
                 >
@@ -575,10 +832,19 @@ export default function CustomerDetails() {
       />
 
       <PaymentDialog
-        open={payOpen}
-        customer={customer}
-        onClose={() => setPayOpen(false)}
+        open={Boolean(payTarget)}
+        target={payTarget}
+        onClose={() => setPayTarget(null)}
         onConfirm={handlePay}
+        busy={saving}
+      />
+
+      <LightBillDialog
+        open={billOpen}
+        customer={customer}
+        existingBill={existingBill}
+        onClose={() => setBillOpen(false)}
+        onSave={handleSaveBill}
         busy={saving}
       />
 
@@ -589,23 +855,35 @@ export default function CustomerDetails() {
         busy={saving}
         title={`Delete ${customer.name}?`}
         confirmLabel="Delete tenant"
-        message={`This permanently removes the tenant record, their ${payments.length} payment ${
-          payments.length === 1 ? 'entry' : 'entries'
-        } and any uploaded photos or ID documents. This cannot be undone.`}
+        message={`This permanently removes the tenant record, their ${customerTx.length} payment ${
+          customerTx.length === 1 ? 'entry' : 'entries'
+        }, all rent cycles and light bills, and any uploaded photos or ID documents. This cannot be undone.`}
       />
 
       <ConfirmDialog
-        open={Boolean(deletingPayment)}
-        onClose={() => setDeletingPayment(null)}
-        onConfirm={handleDeletePayment}
-        title="Delete this payment entry?"
+        open={Boolean(deletingTx)}
+        onClose={() => setDeletingTx(null)}
+        onConfirm={handleDeleteTx}
+        busy={saving}
+        title="Delete this entry?"
         confirmLabel="Delete entry"
         message={
-          deletingPayment
-            ? `${formatCurrency(deletingPayment.amount)} received on ${formatDate(deletingPayment.date)} will be removed. The next rent due date will not change.`
+          deletingTx
+            ? `${formatRupees(deletingTx.amount)} received on ${formatDate(deletingTx.date)} will be removed, and the rent cycle or bill it paid will be recalculated.`
             : ''
         }
       />
     </div>
   );
+}
+
+function currentMonthKey(date) {
+  return dayjs(date).format('YYYY-MM');
+}
+
+function formatBillMonth(key) {
+  const [year, month] = String(key || '').split('-');
+  if (!year || !month) return String(key || '');
+  const names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${names[Number(month) - 1]} ${year}`;
 }

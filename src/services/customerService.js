@@ -53,6 +53,9 @@ export function normalizeCustomer(raw = {}) {
     // explicit stops a 31st-joiner from drifting to the 28th after February.
     dueDay: Number(raw.dueDay) || dayjs(joiningDate).date(),
     nextDueDate: raw.nextDueDate || getNextDueDate(joiningDate, 1, raw.dueDay),
+    // Money handed over early that is not yet owed against any cycle. Carried
+    // on the customer (not the cycle) because it is not tied to one month.
+    advanceCredit: Number(raw.advanceCredit) || 0,
     termsAccepted: raw.termsAccepted ?? false,
     termsAcceptedAt: raw.termsAcceptedAt || null,
     status: raw.status || 'active',

@@ -2,11 +2,13 @@ import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import CustomerList from '../components/CustomerList.jsx';
 import { ErrorState, SkeletonList, EmptyState } from '../components/States.jsx';
-import { UsersIcon, AlertIcon, ClockIcon, WalletIcon, UserPlusIcon } from '../components/icons.jsx';
+import { UsersIcon, AlertIcon, WalletIcon, UserPlusIcon, BoltIcon } from '../components/icons.jsx';
 import { customerService } from '../services/index.js';
 import { useData } from '../context/DataContext.jsx';
 import { formatRupees } from '../utils/format.js';
 import { formatDate } from '../utils/dateLogic.js';
+import { getRentStatus } from '../utils/dateLogic.js';
+import { getRemaining } from '../utils/ledger.js';
 
 function StatCard({ label, value, sub, icon: Icon, tone = 'slate' }) {
   const tones = {
@@ -37,13 +39,25 @@ function StatCard({ label, value, sub, icon: Icon, tone = 'slate' }) {
 }
 
 export default function Dashboard() {
-  const { customers, status, error, today, refresh, settings } = useData();
+  const { customers, status, error, today, refresh, settings, openCycleByCustomer, monthTotal, outstandingTotals, pendingList } = useData();
   const navigate = useNavigate();
 
   const sorted = useMemo(() => customerService.sortByDueDate(customers, today), [customers, today]);
-  const summary = useMemo(() => customerService.summarise(customers, today), [customers, today]);
 
-  const nextUp = sorted.find((c) => customerService.getCustomerStatus(c, today) !== 'overdue') ?? null;
+  // Ledger-driven headline stats: a partially paid, overdue tenant still counts.
+  const summary = useMemo(() => {
+    const active = customers.filter((c) => c.status !== 'inactive');
+    let overdue = 0;
+    let onSchedule = 0;
+    for (const c of active) {
+      const cycle = openCycleByCustomer.get(c.id) ?? null;
+      if (getRemaining(cycle) > 0 && getRentStatus(c.nextDueDate, today) === 'overdue') overdue += 1;
+      else onSchedule += 1;
+    }
+    return { total: active.length, overdue, onSchedule };
+  }, [customers, openCycleByCustomer, today]);
+
+  const mostOverdue = pendingList[0] ?? null;
 
   if (status === 'error') {
     return (
@@ -77,37 +91,37 @@ export default function Dashboard() {
         <StatCard
           label="Total tenants"
           value={status === 'loading' ? '—' : summary.total}
-          sub={status === 'loading' ? undefined : `${summary.ok} on schedule`}
+          sub={status === 'loading' ? undefined : `${summary.onSchedule} on schedule`}
           icon={UsersIcon}
           tone="brand"
         />
         <StatCard
           label="Rent overdue"
           value={status === 'loading' ? '—' : summary.overdue}
-          sub={summary.overdue > 0 ? 'Needs follow-up' : 'All clear'}
+          sub={summary.overdue > 0 ? 'Balance still pending' : 'All clear'}
           icon={AlertIcon}
           tone={summary.overdue > 0 ? 'red' : 'slate'}
         />
         <StatCard
-          label="Due within 5 days"
-          value={status === 'loading' ? '—' : summary.dueSoon}
-          sub={summary.dueSoon > 0 ? 'Send a reminder' : 'Nothing imminent'}
-          icon={ClockIcon}
-          tone={summary.dueSoon > 0 ? 'amber' : 'slate'}
+          label="Collected this month"
+          value={status === 'loading' ? '—' : formatRupees(monthTotal.total)}
+          sub={status === 'loading' ? undefined : `${formatRupees(monthTotal.rent)} rent · ${formatRupees(monthTotal.lightBill)} elec`}
+          icon={WalletIcon}
+          tone="amber"
         />
         <StatCard
-          label="Expected rent / month"
-          value={status === 'loading' ? '—' : formatRupees(summary.expected)}
-          sub={status === 'loading' ? undefined : `${formatRupees(summary.outstanding)} outstanding`}
-          icon={WalletIcon}
-          tone="slate"
+          label="Outstanding"
+          value={status === 'loading' ? '—' : formatRupees(outstandingTotals.rent + outstandingTotals.lightBill)}
+          sub={status === 'loading' ? undefined : `${formatRupees(outstandingTotals.rent)} rent · ${formatRupees(outstandingTotals.lightBill)} elec`}
+          icon={BoltIcon}
+          tone={outstandingTotals.rent + outstandingTotals.lightBill > 0 ? 'red' : 'slate'}
         />
       </section>
 
-      {nextUp && status === 'ready' && (
+      {mostOverdue && status === 'ready' && (
         <p className="text-xs text-slate-500">
-          Next due: <span className="font-medium text-slate-700">{nextUp.name}</span> ·{' '}
-          {formatRupees(nextUp.rentAmount)} on {formatDate(nextUp.nextDueDate)}
+          Most overdue: <span className="font-medium text-slate-700">{mostOverdue.name}</span> ·{' '}
+          {formatRupees(mostOverdue.totalRemaining)} pending, was due {formatDate(mostOverdue.dueDate)}
         </p>
       )}
 

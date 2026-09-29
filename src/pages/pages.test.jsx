@@ -98,17 +98,18 @@ describe('Dashboard', () => {
     expect(rows.getByText('9876543210')).toBeInTheDocument();
   });
 
-  it('shows the summary counts and expected rent', async () => {
+  it('shows the summary counts and collected money this month', async () => {
     renderApp(<Dashboard />);
     await list();
 
     expect(screen.getByText('Total tenants')).toBeInTheDocument();
     expect(screen.getByText('Rent overdue')).toBeInTheDocument();
-    expect(screen.getByText('Due within 5 days')).toBeInTheDocument();
-    expect(screen.getByText('Expected rent / month')).toBeInTheDocument();
+    expect(screen.getByText('Collected this month')).toBeInTheDocument();
+    expect(screen.getByText('Outstanding')).toBeInTheDocument();
 
-    // 6 seeded tenants: 15000+18000+13000+11500+10500+15000
-    expect(screen.getByText('Rs 83,000')).toBeInTheDocument();
+    // Seed deposits: Rahul 5,000 + Imran 5,000 + Aman 8,000 + Priya 18,000
+    // + Deepak 15,000 rent, plus Deepak's 764 light bill payment.
+    expect(screen.getByText('Rs 51,764')).toBeInTheDocument();
   });
 
   it('filters with the chip row', async () => {
@@ -148,7 +149,7 @@ describe('Dashboard', () => {
     expect(overdueCard.className).toContain('rent-overdue');
     expect(within(overdueCard).getByText(/Overdue by 6 days/)).toBeInTheDocument();
 
-    await user.click(within(overdueCard).getByRole('button', { name: /Mark Paid/ }));
+    await user.click(within(overdueCard).getByRole('button', { name: 'Record' }));
 
     // Dialog opens pre-filled with the full rent.
     const dialog = await screen.findByRole('dialog');
@@ -156,7 +157,7 @@ describe('Dashboard', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Record payment' }));
 
     // Toast confirms, and the row is no longer overdue.
-    expect(await screen.findByText(/Payment recorded for Rahul Sharma/)).toBeInTheDocument();
+    expect(await screen.findByText(/Payment recorded/)).toBeInTheDocument();
     const updatedCard = cards.getByText('Rahul Sharma').closest('.rent-row');
     expect(updatedCard.className).not.toContain('rent-overdue');
     expect(within(updatedCard).getByText('Paid')).toBeInTheDocument();
@@ -168,7 +169,9 @@ describe('Dashboard', () => {
 
     const link = cards.getByTitle(/Send rent reminder to Rahul Sharma/);
     expect(link).toHaveAttribute('href', expect.stringContaining('https://wa.me/919876543210?text='));
-    expect(decodeURIComponent(link.getAttribute('href'))).toContain('rent of');
+    // Rahul is overdue with 10,000 still on the open cycle, so the reminder
+    // quotes that balance instead of the flat monthly rent.
+    expect(decodeURIComponent(link.getAttribute('href'))).toContain('balance of ₹10,000');
   });
 });
 
@@ -372,9 +375,12 @@ describe('Admission form', () => {
 
     const stored = JSON.parse(window.localStorage.getItem(KEYS.customers));
     const created = stored.find((c) => c.name === 'Test Person');
-    // Whichever month we land in, the day must be clamped, never spill over.
+    // The 31st must clamp to the last day of whatever month we land in,
+    // never spill over into the next month.
     const due = dayjs(created.nextDueDate);
-    expect(due.date()).toBeLessThanOrEqual(31);
-    expect(due.isAfter(dayjs())).toBe(true);
+    const anchor = dayjs(created.joiningDate).date();
+    expect(anchor).toBe(31);
+    expect(due.date()).toBe(Math.min(anchor, due.daysInMonth()));
+    expect(due.format('YYYY-MM')).toBe(dayjs(created.joiningDate).add(1, 'month').format('YYYY-MM'));
   });
 });

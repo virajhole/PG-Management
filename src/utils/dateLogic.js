@@ -115,3 +115,16 @@ export function toDateInput(value) {
   const d = dayjs(value);
   return d.isValid() ? d.format('YYYY-MM-DD') : '';
 }
+
+/** "YYYY-MM" <-> native <input type="month"> value. */
+export function toMonthInput(value) {
+  if (!value) return '';
+  const d = dayjs(value);
+  return d.isValid() ? d.format('YYYY-MM') : '';
+}
+
+/** Canonical "YYYY-MM" key for any date-ish value. */
+export function formatMonthKey(value) {
+  const d = dayjs(value);
+  return d.isValid() ? d.format('YYYY-MM') : '';
+}

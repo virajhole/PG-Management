@@ -2,13 +2,13 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useEffect } from 'react';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useData } from '../context/DataContext.jsx';
-import { customerService } from '../services/index.js';
-import { HomeIcon, UserPlusIcon, UsersIcon, SettingsIcon, LogoutIcon } from './icons.jsx';
+import { HomeIcon, UserPlusIcon, UsersIcon, WalletIcon, SettingsIcon, LogoutIcon } from './icons.jsx';
 
 const NAV_ITEMS = [
   { to: '/', label: 'Home', icon: HomeIcon, end: true },
   { to: '/admission', label: 'Admission', icon: UserPlusIcon, end: false },
   { to: '/customers', label: 'Tenants', icon: UsersIcon, end: false },
+  { to: '/transactions', label: 'Money', icon: WalletIcon, end: false },
   { to: '/settings', label: 'Settings', icon: SettingsIcon, end: false },
 ];
 
@@ -42,9 +42,9 @@ function NavItem({ item, variant }) {
 }
 
 function OverdueCount() {
-  const { customers, today, status } = useData();
+  const { pendingList, status } = useData();
   if (status !== 'ready') return null;
-  const overdue = customerService.summarise(customers, today).overdue;
+  const overdue = pendingList.filter((r) => r.daysOverdue > 0 && r.rentRemaining > 0).length;
   if (!overdue) return null;
   return (
     <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[11px] font-bold text-white">

@@ -1,13 +1,16 @@
-import { readJSON, writeJSON, KEYS } from './localStore.js';
-import { normalizeCustomer, createCustomer, addPayment } from './customerService.js';
-import { dayjs, getCycleStart, createId } from '../utils/dateLogic.js';
+import { readJSON, writeJSON, KEYS, SCHEMA_VERSION } from './localStore.js';
+import { createCustomer, normalizeCustomer } from './customerService.js';
+import { ensureOpenCycle } from './cycleService.js';
+import { recordRentPayment, saveLightBill, recordLightBillPayment } from './transactionService.js';
+import { dayjs } from '../utils/dateLogic.js';
 import { DEFAULT_SETTINGS } from './settingsService.js';
 
 /**
- * Demo data so the red / yellow / green coding can be checked the moment the
- * app opens. Dates are generated relative to *today* rather than hard-coded,
- * so the sample always shows one overdue, one due in 3 days and one due in 20
- * days whenever it is seeded.
+ * Demo data so the whole ledger can be checked the moment the app opens: one
+ * overdue tenant with a *partial* rent payment and a pending light bill, a few
+ * settled cycles, and transactions dated today and earlier this month. Dates
+ * are generated relative to *today*, so the sample always shows the red /
+ * yellow / green coding whenever it is seeded.
  */
 
 /** Build a customer whose next rent due date lands `offsetDays` from today. */
@@ -127,7 +130,18 @@ export function buildSampleCustomers() {
   return samples;
 }
 
-/** Insert the samples, including one settled payment so "Paid" has a member. */
+/**
+ * Insert the samples through the ledger itself (never the old `addPayment`),
+ * so the seeded state demonstrates real partial payments, bill entries and a
+ * non-empty transaction log.
+ *
+ *   Rahul   overdue, partial 5,000 of 11,500 today, plus a pending light bill
+ *   Priya   due tomorrow, settled this month in full via bank
+ *   Aman    due in 3 days, partial 8,000 of ~rent today
+ *   Sneha   due in 20 days, untouched
+ *   Imran   due today, just admitted, partial 5,000 via UPI
+ *   Deepak  paid ahead - last month settled 5 days ago
+ */
 export async function seedSampleData() {
   const samples = buildSampleCustomers();
   const created = [];
@@ -140,20 +154,89 @@ export async function seedSampleData() {
     void updatedAt;
     void payments;
     const record = await createCustomer(rest);
+    await ensureOpenCycle(record);
     created.push(record);
   }
 
-  // Deepak Joshi is the healthy/paid one: his previous cycle was settled on time.
-  const deepak = created[created.length - 1];
-  if (deepak) {
-    const previousDue = getCycleStart(deepak.nextDueDate, deepak.dueDay);
-    await addPayment(deepak.id, {
-      amount: deepak.rentAmount,
-      date: previousDue,
-      mode: 'upi',
-      note: 'Rent for last month',
-    });
-  }
+  const [rahul, priya, aman, , imran, deepak] = created;
+  const today = dayjs().startOf('day');
+  const startOfMonth = today.startOf('month');
+
+  // A date earlier this month, never pushed past today when the month is young.
+  const earlierThisMonth = (dayOffset) => {
+    const candidate = startOfMonth.add(dayOffset, 'day');
+    return candidate.isAfter(today) ? today : candidate;
+  };
+
+  // Rahul: the classic partial-payment case - paid 5,000 today of an 11,500 rent,
+  // still overdue, with this month's light bill left pending and clearly broken up.
+  await recordRentPayment({
+    customerId: rahul.id,
+    amount: 5000,
+    date: today.format('YYYY-MM-DD'),
+    mode: 'cash',
+    note: 'Partial rent payment',
+  });
+  await saveLightBill({
+    customerId: rahul.id,
+    units: 80,
+    ratePerUnit: 4.25,
+    billAmount: 700, // 80 x 4.25 = 340 + 360 fixed charges
+    note: '80 units x Rs 4.25 = Rs 340 + Rs 360 fixed charges',
+  });
+
+  // Imran: joining today, first rent due today, a partial UPI payment since morning.
+  await recordRentPayment({
+    customerId: imran.id,
+    amount: 5000,
+    date: today.format('YYYY-MM-DD'),
+    mode: 'upi',
+    note: 'First month - partial payment',
+  });
+
+  // Aman: partial payment today, due in 3 days.
+  await recordRentPayment({
+    customerId: aman.id,
+    amount: 8000,
+    date: today.format('YYYY-MM-DD'),
+    mode: 'upi',
+    note: 'Partial rent payment',
+  });
+
+  // Priya: settled last month in full, via bank, earlier this month.
+  await recordRentPayment({
+    customerId: priya.id,
+    amount: priya.rentAmount,
+    date: earlierThisMonth(5).format('YYYY-MM-DD'),
+    mode: 'bank',
+    note: 'Rent for last month through bank transfer',
+  });
+
+  // Deepak: healthy tenant, settled his previous cycle in full, 5 days ago.
+  await recordRentPayment({
+    customerId: deepak.id,
+    amount: deepak.rentAmount,
+    date: earlierThisMonth(5).format('YYYY-MM-DD'),
+    mode: 'cash',
+    note: 'Rent for last month',
+  });
+
+  // Give Deepak's settled cycle a paid light bill for context.
+  const deepakBill = await saveLightBill({
+    customerId: deepak.id,
+    units: 95,
+    ratePerUnit: 4.25,
+    billAmount: 764, // 403.75 + 360 fixed
+    note: '95 units x Rs 4.25 = Rs 403.75 + Rs 360 fixed charges',
+  });
+  await recordLightBillPayment({
+    customerId: deepak.id,
+    billId: deepakBill.id,
+    amount: deepakBill.billAmount,
+    date: earlierThisMonth(3).format('YYYY-MM-DD'),
+    mode: 'bank',
+    note: 'Paid in full',
+  });
 
   return created;
 }
@@ -167,11 +250,13 @@ export async function ensureSeeded() {
 
   await seedSampleData();
   writeJSON(KEYS.seeded, true);
+  // The seeded data is already in the new format - tell the migration it has
+  // nothing to do, or it would see fresh empty-payment customers and duplicate
+  // the cycles this function just created.
+  writeJSON(KEYS.schemaVersion, SCHEMA_VERSION);
   return true;
 }
 
 export function wasSeeded() {
   return readJSON(KEYS.seeded, false);
 }
-
-export { createId };

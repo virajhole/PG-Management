@@ -3,11 +3,12 @@ import { MessageIcon } from './icons.jsx';
 
 /**
  * "Send reminder" opens WhatsApp with a prefilled, plain-text rent reminder.
+ * `remaining` (an open-cycle balance) is folded into the message when given.
  * The number is normalised to international form (no +, spaces or dashes)
  * because wa.me rejects anything else.
  */
-export default function ReminderButton({ customer, className = 'btn-secondary', label = 'Remind', compact = false }) {
-  const href = waLink(customer.mobile, buildReminderMessage(customer));
+export default function ReminderButton({ customer, remaining = null, className = 'btn-secondary', label = 'Remind', compact = false }) {
+  const href = waLink(customer.mobile, buildReminderMessage(customer, remaining));
   if (!href) return null;
 
   return (

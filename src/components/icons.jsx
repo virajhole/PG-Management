@@ -161,3 +161,9 @@ export const DownloadIcon = (p) => (
     <path d="M4 16v2.5A2.5 2.5 0 0 0 6.5 21h11a2.5 2.5 0 0 0 2.5-2.5V16" />
   </svg>
 );
+
+export const BoltIcon = (p) => (
+  <svg {...base} {...p}>
+    <path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z" />
+  </svg>
+);

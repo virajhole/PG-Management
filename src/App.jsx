@@ -15,6 +15,7 @@ const Admission = lazy(() => import('./pages/Admission.jsx'));
 const CustomerDetails = lazy(() => import('./pages/CustomerDetails.jsx'));
 const Settings = lazy(() => import('./pages/Settings.jsx'));
 const Customers = lazy(() => import('./pages/Customers.jsx'));
+const Transactions = lazy(() => import('./pages/Transactions.jsx'));
 
 function RequireAuth({ children }) {
   const { isAuthenticated } = useAuth();
@@ -90,6 +91,14 @@ export default function App() {
                   element={
                     <Suspense fallback={<LoadingBlock label="Loading tenant…" />}>
                       <CustomerDetails />
+                    </Suspense>
+                  }
+                />
+                <Route
+                  path="/transactions"
+                  element={
+                    <Suspense fallback={<LoadingBlock label="Loading transactions…" />}>
+                      <Transactions />
                     </Suspense>
                   }
                 />

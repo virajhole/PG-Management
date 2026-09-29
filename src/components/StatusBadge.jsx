@@ -1,5 +1,5 @@
 import { getRentStatus, getRentStatusLabel } from '../utils/dateLogic.js';
-import { isPaidForCurrentCycle } from '../services/customerService.js';
+import { getRemaining } from '../utils/ledger.js';
 import { CheckCircleIcon, ClockIcon, AlertIcon } from './icons.jsx';
 
 const STYLES = {
@@ -23,15 +23,25 @@ export const RENT_ROW_CLASS = {
   ok: 'rent-ok rent-row border-l-4',
 };
 
-export function rentRowClass(customer, today) {
-  return RENT_ROW_CLASS[getRentStatus(customer.nextDueDate, today)] ?? RENT_ROW_CLASS.ok;
+/**
+ * The colour rules, driven by the open cycle:
+ *   red    overdue rent still carries a balance
+ *   amber  due within 5 days and still carries a balance
+ *   green  paid up (no balance) OR simply not due yet
+ * A partially paid cycle keeps its colour - partial payment never clears it.
+ */
+export function cycleBucket(cycle, customer, today) {
+  if (getRemaining(cycle) <= 0) return 'paid';
+  return getRentStatus(customer.nextDueDate, today);
 }
 
-export default function StatusBadge({ customer, today, className = '' }) {
-  // A settled, up-to-date tenant reads better as "Paid" than as a countdown.
-  const paid = isPaidForCurrentCycle(customer, today);
-  const status = paid ? 'paid' : getRentStatus(customer.nextDueDate, today);
-  const label = paid ? 'Paid' : getRentStatusLabel(customer.nextDueDate, today);
+export function rentRowClass(customer, today, cycle = null) {
+  return RENT_ROW_CLASS[cycleBucket(cycle, customer, today)] ?? RENT_ROW_CLASS.ok;
+}
+
+export default function StatusBadge({ customer, today, cycle = null, className = '' }) {
+  const status = cycleBucket(cycle, customer, today);
+  const label = status === 'paid' ? 'Paid' : getRentStatusLabel(customer.nextDueDate, today);
   const Icon = ICONS[status] ?? ClockIcon;
 
   return (
