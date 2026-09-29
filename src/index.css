@@ -1,0 +1,186 @@
+@import 'tailwindcss';
+
+/* ---------------------------------------------------------------- theme */
+@theme {
+  --color-brand-50: #eef4ff;
+  --color-brand-100: #dae4ff;
+  --color-brand-200: #bccfff;
+  --color-brand-300: #8eaeff;
+  --color-brand-400: #5a83fd;
+  --color-brand-500: #345dfb;
+  --color-brand-600: #1f3cf4;
+  --color-brand-700: #1a2fe1;
+  --color-brand-800: #1c29b6;
+  --color-brand-900: #1d2c8f;
+  --color-brand-950: #151b57;
+
+  --font-sans:
+    'Inter var', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    sans-serif;
+}
+
+/* -------------------------------------------------------------- base */
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-slate-100 text-slate-900 antialiased;
+    /* Nothing in this app should ever scroll sideways. */
+    overflow-x: hidden;
+  }
+
+  /* Keep the on-screen keyboard from zooming iOS inputs out of view. */
+  input,
+  select,
+  textarea,
+  button {
+    font-size: 16px;
+  }
+
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-brand-500;
+  }
+
+  /* iOS zooms the viewport on focus unless font-size is already >= 16px */
+  @supports (-webkit-touch-callout: none) {
+    input,
+    select,
+    textarea {
+      font-size: 16px;
+    }
+  }
+}
+
+/* -------------------------------------------------------- components */
+@layer components {
+  .field-label {
+    @apply mb-1.5 block text-sm font-medium text-slate-700;
+  }
+
+  .field-input {
+    @apply min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-base
+      text-slate-900 shadow-xs transition placeholder:text-slate-400
+      focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 focus:outline-none
+      disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500;
+  }
+
+  .field-input-error {
+    @apply border-red-400 focus:border-red-500 focus:ring-red-500/20;
+  }
+
+  .field-hint {
+    @apply mt-1 text-xs text-slate-500;
+  }
+
+  .field-error {
+    @apply mt-1 text-xs font-medium text-red-600;
+  }
+
+  .card {
+    @apply rounded-2xl border border-slate-200 bg-white shadow-sm;
+  }
+
+  .btn,
+  .btn-primary,
+  .btn-secondary,
+  .btn-danger,
+  .btn-ghost {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold
+      transition active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply bg-brand-600 text-white shadow-sm hover:bg-brand-700;
+  }
+
+  .btn-secondary {
+    @apply border border-slate-300 bg-white text-slate-700 hover:bg-slate-50;
+  }
+
+  .btn-danger {
+    @apply bg-red-600 text-white hover:bg-red-700;
+  }
+
+  .btn-ghost {
+    @apply text-slate-600 hover:bg-slate-100;
+  }
+
+  .chip {
+    @apply inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-sm
+      font-medium whitespace-nowrap transition;
+  }
+}
+
+/* --------------------------------------------------- rent status rows */
+@layer utilities {
+  .rent-overdue {
+    --rent-accent: var(--color-red-500);
+    --rent-surface: var(--color-red-50);
+    --rent-border: var(--color-red-200);
+  }
+
+  .rent-soon {
+    --rent-accent: var(--color-amber-500);
+    --rent-surface: var(--color-amber-50);
+    --rent-border: var(--color-amber-200);
+  }
+
+  .rent-ok {
+    --rent-accent: var(--color-emerald-500);
+    --rent-surface: var(--color-emerald-50);
+    --rent-border: var(--color-emerald-200);
+  }
+
+  .rent-row {
+    background-color: var(--rent-surface);
+    border-color: var(--rent-border);
+  }
+
+  .rent-stripe {
+    background-color: var(--rent-accent);
+  }
+}
+
+/* Scrollbars inside the T&C box and long lists */
+.scroll-slim {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-slate-300) transparent;
+}
+
+.scroll-slim::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.scroll-slim::-webkit-scrollbar-thumb {
+  background-color: var(--color-slate-300);
+  border-radius: 9999px;
+}
+
+/* Respect users who ask for less motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-toast-in {
+  animation: toast-in 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}

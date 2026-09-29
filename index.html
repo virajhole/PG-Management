@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>PG Manager</title>
+    <meta
+      name="description"
+      content="Manage paying guests: admissions, rent due dates, deposits, payment history and ID proofs. Works offline."
+    />
+
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#1f3cf4" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <!-- iOS standalone PWA behaviour -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="PG Manager" />
+    <meta name="mobile-web-app-capable" content="yes" />
+
+    <style>
+      /* First-paint background so there is no white flash on launch. */
+      html,
+      body,
+      #root {
+        min-height: 100%;
+        background-color: #f1f5f9;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>
+      <div style="padding: 24px; font-family: system-ui, sans-serif">
+        <h1>JavaScript required</h1>
+        <p>PG Manager needs JavaScript enabled to track tenants and rent.</p>
+      </div>
+    </noscript>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
