@@ -104,10 +104,22 @@ project is not configured.
 
 ### 4. Deploy
 
-`npm run build` produces a static `dist/`. Point any static host at it, and set the
-environment variables in that host's build settings. Remember to add the deployed
-origin to **Authentication → URL Configuration**, otherwise Supabase redirects to
-`localhost` after sign-in.
+Push to GitHub and import the repo into Vercel — it detects Vite automatically and
+uses the committed `vercel.json` (SPA rewrites plus the service worker and asset
+cache headers). The only required step is adding the two environment variables:
+
+**Vercel → Project → Settings → Environment Variables**
+
+| Name | Value |
+| --- | --- |
+| `VITE_SUPABASE_URL` | `https://<your-project-ref>.supabase.co` |
+| `VITE_SUPABASE_ANON_KEY` | your anon key |
+
+Apply them to **Production**, **Preview** and **Development**, then redeploy. These
+are baked in at build time, so a rebuild is required after changing them.
+
+Then add your deployed origin to **Authentication → URL Configuration → Redirect
+URLs**, otherwise Supabase sends the browser back to `localhost` after sign-in.
 
 ## How the data is stored
 

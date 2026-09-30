@@ -157,9 +157,12 @@ create index if not exists transactions_customer_idx on public.transactions (cus
 create index if not exists transactions_date_idx on public.transactions (date);
 create index if not exists transactions_user_idx on public.transactions (user_id);
 
+-- One row per account, keyed by the owner's own id. The row is *not* seeded
+-- here: at migration time there is no signed-in user, so `auth.uid()` is null,
+-- and a fixed sentinel key would give every account in the project the same
+-- row. Instead the app inserts its own row on first save.
 create table if not exists public.settings (
-  id                    text primary key default 'app',
-  user_id               uuid not null default auth.uid(),
+  user_id               uuid primary key default auth.uid(),
   sharing_prices        jsonb not null default '{}'::jsonb,
   default_deposit       numeric(12,2) not null default 0,
   rent_due_day_of_month int not null default 10,
@@ -170,10 +173,6 @@ create table if not exists public.settings (
   currency_note         text not null default '',
   updated_at            timestamptz not null default now()
 );
-
-insert into public.settings (id, user_id)
-values ('app', auth.uid())
-on conflict (id) do nothing;
 
 -- ============================================================================
 -- COMPUTED VIEWS

@@ -249,13 +249,17 @@ export async function clearTable(table) {
 
 // --------------------------------------------------------------- settings
 
-/** The app's single settings row (id 'app'), or null before first save. */
+/**
+ * The signed-in account's settings row, or null before the first save. The row
+ * is keyed by `user_id`, so there is nothing to filter on: RLS already scopes
+ * the select to the caller and this can only ever return their own row.
+ */
 export async function getSettings() {
   const sb = getSupabase();
   const { data, error } = await sb
     .from(TABLES.settings)
     .select('*')
-    .eq('id', 'app')
+    .limit(1)
     .maybeSingle();
   if (error) throw new Error(error.message);
   if (!data) return null;
@@ -273,10 +277,10 @@ export async function getSettings() {
 
 export async function saveSettingsRow(settings) {
   const sb = getSupabase();
-  const patch = snakeRow(settings, SETTINGS_COLUMNS, { id: 'app', updated_at: new Date().toISOString() });
+  const patch = snakeRow(settings, SETTINGS_COLUMNS, { updated_at: new Date().toISOString() });
   const { error } = await sb
     .from(TABLES.settings)
-    .upsert(patch, { onConflict: 'id' })
+    .upsert(patch, { onConflict: 'user_id' })
     .select()
     .maybeSingle();
   if (error) throw new Error(error.message);

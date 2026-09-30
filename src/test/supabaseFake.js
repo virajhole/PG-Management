@@ -31,7 +31,7 @@ const db = {
   cycles: [],
   lightBills: [],
   transactions: [],
-  settings: null,
+  settings: new Map(),
   images: new Map(),
   session: null,
   listeners: new Set(),
@@ -247,9 +247,15 @@ export async function clearTable(table) {
 
 // ----------------------------------------------------------------- settings
 
+/**
+ * Keyed by user id, like the real table. RLS means one row per account, and
+ * tests that sign in as two different users must not see each other's settings.
+ */
+const ownerId = () => db.session?.id ?? null;
+
 export async function getSettings() {
-  if (!db.settings) return null;
-  const s = db.settings;
+  const s = ownerId() ? db.settings.get(ownerId()) : undefined;
+  if (!s) return null;
   return {
     sharingPrices: clone(s.sharing_prices ?? {}),
     defaultDeposit: Number(s.default_deposit) || 0,
@@ -263,8 +269,10 @@ export async function getSettings() {
 }
 
 export async function saveSettingsRow(settings) {
+  const user = ownerId();
+  if (!user) throw new Error('Sign in to save settings.');
   const snake = Object.fromEntries(Object.entries(settings).map(([k, v]) => [toSnake(k), v]));
-  db.settings = { ...snake, id: 'app', updated_at: isoNow() };
+  db.settings.set(user, { ...snake, user_id: user, updated_at: isoNow() });
   return getSettings();
 }
 
@@ -621,7 +629,7 @@ export function resetDatabase() {
   db.cycles = [];
   db.lightBills = [];
   db.transactions = [];
-  db.settings = null;
+  db.settings = new Map();
   db.images = new Map();
   db.session = null;
   db.listeners.clear();
