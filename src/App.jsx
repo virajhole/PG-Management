@@ -18,9 +18,13 @@ const Customers = lazy(() => import('./pages/Customers.jsx'));
 const Transactions = lazy(() => import('./pages/Transactions.jsx'));
 
 function RequireAuth({ children }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, checking } = useAuth();
   const location = useLocation();
 
+  // The session is restored asynchronously. Redirecting before that check
+  // finishes would bounce a signed-in user to /login and then lose the route
+  // they were actually on, so hold the gate until we know who they are.
+  if (checking) return <LoadingBlock label="Checking your session…" />;
   if (!isAuthenticated) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
@@ -28,7 +32,8 @@ function RequireAuth({ children }) {
 }
 
 function GuestOnly({ children }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, checking } = useAuth();
+  if (checking) return <LoadingBlock label="Checking your session…" />;
   if (isAuthenticated) return <Navigate to="/" replace />;
   return children;
 }

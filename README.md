@@ -1,10 +1,8 @@
 # PG Manager
 
 A mobile-first paying-guest (PG) management app. Track tenants, rent dues, identity
-proofs and payments — and it all runs offline on the device.
-
-Built as a client-only app: no server, no accounts, no network calls. Everything is
-stored in the browser on the phone or laptop it is used on.
+proofs and payments, with everything stored in your own Supabase project and visible
+only to your account.
 
 ## Features
 
@@ -21,9 +19,11 @@ stored in the browser on the phone or laptop it is used on.
 - **Customer details** — full record, payment history, proof viewer, inline editing,
   edit and delete.
 - **Settings** — per-sharing-type pricing, deposit, editable terms & conditions, PG
-  and owner details, app PIN, sample data, and a full data wipe.
-- **App lock** — a 4–6 digit PIN gate with a 12-hour session.
-- **Installable PWA** — add to the home screen, launches full screen, works offline.
+  and owner details, sample data, backup/restore and a full data wipe.
+- **Accounts** — email and password sign-in instead of a device-local PIN, so the same
+  ledger is reachable from any browser and Row Level Security keeps it private.
+- **Installable PWA** — add to the home screen, launches full screen, caches the app
+  shell for offline use.
 
 ## Tech
 
@@ -32,19 +32,24 @@ stored in the browser on the phone or laptop it is used on.
 - [React Router 7](https://reactrouter.com)
 - [React Hook Form](https://react-hook-form.com) + [Zod](https://zod.dev)
 - [Day.js](https://day.js.org) for all date maths
-- [idb](https://github.com/jakearchibald/idb) for image storage
-- Context + hooks for state (no external state library needed)
-- [Vitest](https://vitest.dev) + Testing Library + fake-indexeddb for tests
+- [supabase-js](https://supabase.com/docs/reference/javascript) for Auth, Postgres,
+  Storage and RPCs
+- Context + hooks for state
+- [Vitest](https://vitest.dev) + Testing Library for tests
 
 ## Getting started
 
+You need a Supabase project first (see [Setting up Supabase](#setting-up-supabase)).
+Then:
+
 ```bash
 npm install
+cp .env.example .env   # fill in your project URL and anon key
 npm run dev
 ```
 
-Then open the printed local URL. On a phone, use the network URL so the app runs on
-the same device you will actually use it on.
+Open the printed local URL. On a phone, use the network URL so the app runs on the
+same device you will actually use it on.
 
 | Script | What it does |
 | --- | --- |
@@ -55,20 +60,93 @@ the same device you will actually use it on.
 | `npm run test:watch` | Watch mode |
 | `npm run lint` | Lint with [oxlint](https://oxc.rs/docs/guide/usage/linter.html) |
 
+## Setting up Supabase
+
+### 1. Create the schema
+
+In your Supabase project, either paste `supabase/migrations/001_init.sql` into the SQL
+editor and run it, or apply it with the CLI:
+
+```bash
+supabase link --project-ref <your-project-ref>
+supabase db push
+```
+
+The migration creates four tables (`customers`, `rent_cycles`, `light_bills`,
+`transactions`), a single-row `settings` table, two read views (`rent_cycles_view`,
+`light_bills_view`), the private `tenant-images` bucket, and Row Level Security
+policies on everything. Every policy scopes rows to `auth.uid()`, so the anon key
+alone can read nothing.
+
+### 2. Configure sign-in
+
+**Authentication → Providers → Email**: enable it. Turning off *Confirm email* makes
+sign-up instant, which is convenient for a single-owner app; leaving it on means a
+new account has to confirm before it can sign in.
+
+### 3. Point the app at it
+
+```bash
+cp .env.example .env
+```
+
+```dotenv
+VITE_SUPABASE_URL=https://<your-project-ref>.supabase.co
+VITE_SUPABASE_ANON_KEY=<your-anon-key>
+```
+
+Both come from **Project Settings → API**. The anon key is safe to ship in a browser
+bundle — Row Level Security is what protects the data, not the key. Never put the
+`service_role` key in `.env`.
+
+Without these the app still builds and runs, and the sign-in screen explains that the
+project is not configured.
+
+### 4. Deploy
+
+`npm run build` produces a static `dist/`. Point any static host at it, and set the
+environment variables in that host's build settings. Remember to add the deployed
+origin to **Authentication → URL Configuration**, otherwise Supabase redirects to
+`localhost` after sign-in.
+
 ## How the data is stored
 
-| Data | Where | Format |
+| Data | Where | Notes |
 | --- | --- | --- |
-| Tenants, payments, settings | `localStorage` | JSON |
-| Photos and identity proofs | `IndexedDB` | Base64 JPEG, max 800px edge |
+| Tenants, rent cycles, light bills, transactions | Postgres, per account | `user_id = auth.uid()`, RLS on every table |
+| Settings | Postgres, one row per account | `id = 'app'` |
+| Photos and identity proofs | Private Storage bucket | Read only through 6-hour signed URLs |
 
-Tenant records and settings are written to `localStorage`; images go to `IndexedDB`
-because base64 images are far too large for a comfortable `localStorage` experience.
-The service layer is `async` throughout, so swapping in a real backend later means
-reimplementing `src/services/*` rather than rewriting the pages.
+All access goes through one module, `src/services/supabase.js`. The service modules
+above it (`customerService`, `cycleService`, `lightBillService`, `transactionService`,
+`settingsService`, `imageService`, `authService`) never talk to the network
+themselves, and the pages never import the data layer directly. Swapping the backend
+means changing one file.
 
-Photos are compressed in the browser (longest edge capped at 800px, JPEG) before
-being stored, to keep them small enough for a few dozen tenants.
+Money mutations are Postgres functions (`SECURITY DEFINER`, re-scoped by `auth.uid()`
+inside) rather than a read-then-write in JavaScript, so two devices cannot
+interleave a payment into an inconsistent balance:
+
+- `preview_rent_payment` — what an amount will do before you commit it
+- `record_rent_payment` — apply it, settle the cycle and open the next one
+- `save_light_bill` / `record_light_bill_payment`
+- `delete_transaction` — reverse it and restore the cycle and credit
+- `import_backup` / `wipe_all`
+
+Storage objects are namespaced `<user-id>/c/<customer-id>/...`, so a path from one
+account can never resolve in another.
+
+## Backup and portability
+
+Settings → *Backup & restore* exports the whole account as JSON (or CSV for the
+spreadsheet) and imports one back. The JSON includes the actual ID document bytes,
+not just their storage paths, so a snapshot restores correctly into a different
+account. Import is one atomic database call, so it cannot half-apply.
+
+Coming from the older on-device version? Settings → *Import local data* converts
+whatever the previous version left in this browser's `localStorage` into your account.
+It is deliberately user-triggered, never automatic, and keeps a copy of the original
+under `pgm.backup.v1` before converting anything.
 
 ## Routes
 
@@ -78,8 +156,9 @@ being stored, to keep them small enough for a few dozen tenants.
 | `/admission` | New tenant admission |
 | `/customers` | Tenant directory |
 | `/customer/:id` | Tenant details |
+| `/transactions` | Payment history |
 | `/settings` | Settings |
-| `/login` | PIN gate |
+| `/login` | Sign in / create account |
 
 ## Testing
 
@@ -89,28 +168,32 @@ npm test
 
 - `src/utils/dateLogic.test.js` — rent due-date maths, month-end clamping, statuses.
 - `src/utils/validation.test.js` — admission/edit schema rules and input sanitisers.
+- `src/utils/ledger.test.js` — payment planning, credits and cycle roll-forward.
 - `src/services/customerService.test.js` — CRUD, payment roll-forward, sorting, totals.
+- `src/services/ledgerServices.test.js` — rent cycles, light bills and transactions.
+- `src/services/backupService.test.js` — export/import round-trip, CSV, wipe.
 - `src/pages/pages.test.jsx` — real components against the real service layer:
-  seeding, colour coding, filtering, the payment flow, and form validation.
+  colour coding, filtering, the payment flow, and form validation.
 - `src/App.test.jsx` — smoke tests for the router, the auth gate, the layout and the
   lazily loaded routes.
+
+Tests run against `src/test/supabaseFake.js`, an in-memory stand-in that exposes the
+same surface as the real data layer (including the same `p_`-prefixed RPC argument
+names). Each test seeds its own data — the app itself no longer seeds demo data on
+boot.
 
 Service tests run in the plain `node` environment with a small `localStorage`
 stand-in; the page tests opt into `happy-dom` with a per-file docblock.
 
 ## Notes and limitations
 
-- **The PIN is not encryption.** It is a salted SHA-256 hash kept in
-  `localStorage` and stops casual snooping on a shared device — it does not
-  protect the underlying data. Treat it as a screen lock, not a safe.
-- **Aadhaar and PAN numbers are stored in plain text** on the device, because the
-  app needs to show them. Do not use a shared or untrusted device for real
-  identity documents, and wipe the data (Settings → *Erase all tenant data*) before
-  disposing of a device.
-- **No backup.** Clearing browser data, site data, or uninstalling the PWA deletes
-  everything. There is no sync and no export.
-- The first PIN you set is the PIN — there is no default and no recovery if it is
-  forgotten, so clear site data to start over.
+- **Aadhaar and PAN numbers are stored in plain text** in your database, because the
+  app needs to show them. Anyone with dashboard access to the Supabase project can
+  read them, so keep the project private and use per-owner accounts if more than one
+  person needs access.
+- **Requires a network connection** for anything beyond the cached app shell. There
+  is no offline write queue; if you go offline, existing screens stay visible but new
+  writes will fail until the connection returns.
 - Sample tenants are generated with due dates relative to today, so the demo always
   looks realistic. Settings → *Add sample tenants* (or *Erase all tenant data*)
   manages them.
@@ -124,11 +207,15 @@ stand-in; the page tests opt into `happy-dom` with a per-file docblock.
 src/
   components/   Reusable UI: layout, customer list, form fields, dialogs, icons
   context/      Auth, data and toast providers
-  hooks/        useImageUrl, useInstallPrompt
-  pages/        Dashboard, Admission, CustomerDetails, Customers, Settings, Login
-  services/     Storage, customers, settings, seeding, images, auth
-  utils/        Date maths, formatting, validation, image compression
-  test/         Shared Vitest setup
+  hooks/        useImageUrl, useInstallPrompt, useOnlineStatus
+  pages/        Dashboard, Admission, CustomerDetails, Customers, Transactions,
+                Settings, Login
+  services/     supabase.js (the only module that talks to Supabase) plus the
+                service facades above it
+  supabase/     Client construction
+  test/         Shared Vitest setup and the in-memory Supabase fake
+supabase/
+  migrations/   001_init.sql — schema, RLS, storage and RPCs
 public/
   manifest.webmanifest, sw.js, icons
 scripts/
@@ -137,5 +224,5 @@ scripts/
 
 ## Privacy
 
-No analytics, no telemetry, no network requests. The app makes no outbound calls
-other than the WhatsApp links you tap yourself.
+No analytics and no telemetry. Network requests go to your own Supabase project, plus
+the WhatsApp links you tap yourself.

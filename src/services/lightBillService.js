@@ -1,4 +1,4 @@
-import { readJSON, writeJSON, removeKey, KEYS } from './localStore.js';
+import { TABLES, listRows, getRow, getRowWhereAll, updateRow, deleteRow, deleteRowsWhere, clearTable, rpc } from './supabase.js';
 import { createId, nowISO, dayjs } from '../utils/dateLogic.js';
 import { getRemaining, statusFor, money, toAmount, monthKey } from '../utils/ledger.js';
 
@@ -33,62 +33,58 @@ export function normalizeLightBill(raw = {}) {
   };
 }
 
-function readAll() {
-  const stored = readJSON(KEYS.lightBills, []);
-  if (!Array.isArray(stored)) return [];
-  return stored.map(normalizeLightBill);
-}
-
-function writeAll(bills) {
-  writeJSON(KEYS.lightBills, bills);
-  return bills;
-}
-
 /** Newest month first, which is how the history table is displayed. */
 export async function listLightBills() {
-  return readAll().sort((a, b) => (a.month < b.month ? 1 : -1));
+  return (await listRows(TABLES.lightBills))
+    .map(normalizeLightBill)
+    .sort((a, b) => (a.month < b.month ? 1 : -1));
 }
 
 export async function listLightBillsForCustomer(customerId) {
-  return listLightBills().then((bills) => bills.filter((bill) => bill.customerId === customerId));
+  return (await listLightBills()).filter((bill) => bill.customerId === customerId);
 }
 
 export async function getLightBill(id) {
-  return readAll().find((bill) => bill.id === id) ?? null;
+  const row = await getRow(TABLES.lightBills, id);
+  return row ? normalizeLightBill(row) : null;
 }
 
 /** Only one bill per tenant per month, so re-saving updates the existing row. */
 export async function getLightBillForMonth(customerId, month) {
-  return readAll().find((bill) => bill.customerId === customerId && bill.month === month) ?? null;
+  const row = await getRowWhereAll(TABLES.lightBills, { customerId, month });
+  return row ? normalizeLightBill(row) : null;
 }
 
+/** Create the bill via the atomic RPC so the one-per-month rule cannot race. */
 export async function createLightBill(data) {
-  const bills = readAll();
-  const bill = normalizeLightBill(data);
-  bills.push(bill);
-  writeAll(bills);
-  return bill;
+  const bill = await rpc('save_light_bill', {
+    customerId: data.customerId,
+    billId: null,
+    month: data.month || monthKey(),
+    units: data.units ?? null,
+    ratePerUnit: data.ratePerUnit ?? null,
+    billAmount: data.billAmount != null ? toAmount(data.billAmount) : null,
+    note: data.note || '',
+  });
+  return normalizeLightBill(bill);
 }
 
 export async function updateLightBill(id, patch) {
-  const bills = readAll();
-  const index = bills.findIndex((bill) => bill.id === id);
-  if (index === -1) throw new Error('Light bill not found.');
+  const existing = await getLightBill(id);
+  if (!existing) throw new Error('Light bill not found.');
 
   // Changing units x rate re-derives the amount, but never below what is
   // already paid - otherwise editing a bill could silently make it negative.
-  const merged = { ...bills[index], ...patch, id };
+  const merged = { ...existing, ...patch, id };
   if (patch.units != null && patch.ratePerUnit != null && patch.billAmount == null) {
     merged.billAmount = toAmount(Number(patch.units) * Number(patch.ratePerUnit));
   }
-  if (merged.billAmount < bills[index].paidAmount) {
+  if (merged.billAmount < existing.paidAmount) {
     throw new Error('The bill amount cannot be less than the amount already paid.');
   }
 
   const updated = normalizeLightBill({ ...merged, updatedAt: nowISO() });
-  bills[index] = updated;
-  writeAll(bills);
-  return updated;
+  return normalizeLightBill(await updateRow(TABLES.lightBills, id, updated));
 }
 
 /** Re-derive paid/remaining after a transaction is deleted. */
@@ -100,24 +96,24 @@ export async function recomputeLightBillFromPayments(id, payments) {
 }
 
 export async function deleteLightBill(id) {
-  writeAll(readAll().filter((bill) => bill.id !== id));
+  await deleteRow(TABLES.lightBills, id);
   return true;
 }
 
 /** Remove every light bill a deleted customer leaves behind. */
 export async function deleteLightBillsForCustomer(customerId) {
-  writeAll(readAll().filter((bill) => bill.customerId !== customerId));
+  await deleteRowsWhere(TABLES.lightBills, 'customerId', customerId);
   return true;
 }
 
 export async function clearAllLightBills() {
-  removeKey(KEYS.lightBills);
+  await clearTable(TABLES.lightBills);
   return [];
 }
 
 /** Outstanding electricity across every tenant. */
 export async function getLightBillOutstanding() {
-  return money(readAll().reduce((sum, bill) => sum + getRemaining(bill), 0));
+  return money((await listLightBills()).reduce((sum, bill) => sum + getRemaining(bill), 0));
 }
 
 export { dayjs };

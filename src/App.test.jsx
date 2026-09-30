@@ -1,28 +1,30 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, cleanup, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom/vitest';
+
+vi.mock('./services/supabase.js', async () => await import('./test/supabaseFake.js'));
+
 import App from './App.jsx';
 import { startSession, clearSession } from './services/authService.js';
-import { resetStorageCache, KEYS } from './services/localStore.js';
-import { resetSettings } from './services/settingsService.js';
-import { clearAllCustomers } from './services/customerService.js';
+import { resetDatabase } from './test/supabaseFake.js';
+import { seedSampleData } from './services/seedService.js';
 
 /**
  * Smoke tests for the whole app: router, auth gate, layout and the lazily loaded
  * routes, all mounted through the real `App` rather than individual pages.
+ *
+ * The Supabase data layer is swapped for the in-memory fake, and each test seeds
+ * whatever records it needs - the app itself no longer seeds demo data.
  */
 
 const goto = (path) => window.history.pushState({}, '', path);
 
 beforeEach(async () => {
-  resetStorageCache();
+  resetDatabase();
   window.localStorage.clear();
   clearSession();
-  await clearAllCustomers();
-  resetSettings();
-  window.localStorage.setItem(KEYS.seeded, 'false');
   goto('/');
 });
 
@@ -31,28 +33,29 @@ afterEach(() => {
 });
 
 describe('App', () => {
-  it('sends an unauthenticated visitor to the login screen', async () => {
+  it('sends an unauthenticated visitor to the sign-in screen', async () => {
     render(<App />);
 
-    expect(await screen.findByLabelText('PIN')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Enter your PIN' })).toBeInTheDocument();
+    expect(await screen.findByLabelText('Email')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Dashboard' })).not.toBeInTheDocument();
   });
 
-  it('lets the first-time user create a PIN and get in', async () => {
+  it('lets a new user create an account and get in', async () => {
     const user = userEvent.setup();
     render(<App />);
 
-    const pin = await screen.findByLabelText('PIN');
-    await user.type(pin, '2468');
-    await user.click(screen.getByRole('button', { name: /create|set|continue|unlock/i }));
+    const email = await screen.findByLabelText('Email');
+    await user.type(email, 'owner@example.com');
+    await user.type(screen.getByLabelText('Password'), 'hunter2pass');
+    await user.click(screen.getByRole('button', { name: /sign in|create account/i }));
 
-    // The gate lets us through onto the dashboard.
     expect(await screen.findByRole('heading', { name: 'Dashboard' }, { timeout: 3000 })).toBeInTheDocument();
   });
 
   it('renders the dashboard shell for a signed-in user', async () => {
     startSession();
+    await seedSampleData();
     render(<App />);
 
     expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeInTheDocument();
@@ -62,6 +65,13 @@ describe('App', () => {
     // The seeded tenants show up, so the layout and data layer are wired together.
     // Both the mobile cards and the desktop table are in the DOM.
     expect((await screen.findAllByText('Rahul Sharma')).length).toBeGreaterThan(0);
+  });
+
+  it('shows an empty state for an account with no tenants', async () => {
+    startSession();
+    render(<App />);
+
+    expect(await screen.findByText('No tenants yet')).toBeInTheDocument();
   });
 
   it('lazily loads the admission form on its own route', async () => {
@@ -79,6 +89,7 @@ describe('App', () => {
     render(<App />);
 
     expect(await screen.findByText('Sharing room pricing', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.getByText('Backup & restore')).toBeInTheDocument();
   });
 
   it('shows the 404 screen for an unknown route', async () => {

@@ -53,6 +53,36 @@ function OverdueCount() {
   );
 }
 
+/**
+ * The app reads from the cloud, so a dropped connection is worth saying out
+ * loud: the numbers on screen are the last ones loaded, and a payment recorded
+ * now would not be saved.
+ */
+function OfflineBanner() {
+  const { online, status, refresh } = useData();
+  if (online && status !== 'error') return null;
+
+  return (
+    <div
+      role="status"
+      className={`flex items-center justify-between gap-3 px-4 py-2 text-xs font-medium text-white ${
+        status === 'error' ? 'bg-red-600' : 'bg-amber-500'
+      }`}
+    >
+      <span className="min-w-0 truncate">
+        {status === 'error'
+          ? 'Could not load your data from the cloud.'
+          : 'You are offline. Showing the last loaded data; saving changes needs a connection.'}
+      </span>
+      {status === 'error' && (
+        <button type="button" onClick={refresh} className="shrink-0 rounded-lg bg-white/20 px-2.5 py-1 font-semibold hover:bg-white/30">
+          Retry
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function Layout() {
   const { logout } = useAuth();
   const { settings } = useData();
@@ -64,7 +94,9 @@ export default function Layout() {
   }, [location.pathname]);
 
   return (
-    <div className="flex min-h-dvh bg-slate-100">
+    <div className="flex min-h-dvh flex-col bg-slate-100">
+      <OfflineBanner />
+      <div className="flex min-h-0 flex-1">
       {/* ------------------------------------------------------ sidebar */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-slate-200 bg-white lg:flex">
         <div className="flex items-center gap-3 border-b border-slate-200 px-5 py-5">
@@ -91,7 +123,7 @@ export default function Layout() {
         <div className="border-t border-slate-200 p-3">
           <button type="button" onClick={logout} className="btn-ghost w-full justify-start">
             <LogoutIcon className="size-4" />
-            Lock app
+            Sign out
           </button>
         </div>
       </aside>
@@ -110,7 +142,7 @@ export default function Layout() {
             type="button"
             onClick={logout}
             className="flex size-10 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100"
-            aria-label="Lock app"
+            aria-label="Sign out"
           >
             <LogoutIcon className="size-5" />
           </button>
@@ -130,11 +162,12 @@ export default function Layout() {
         aria-label="Primary"
       >
         <div className="mx-auto flex max-w-lg items-stretch gap-1 px-2">
-          {NAV_ITEMS.map((item) => (
-            <NavItem key={item.to} item={item} variant="bottom" />
-          ))}
-        </div>
-      </nav>
+{NAV_ITEMS.map((item) => (
+              <NavItem key={item.to} item={item} variant="bottom" />
+            ))}
+          </div>
+        </nav>
+      </div>
     </div>
   );
 }

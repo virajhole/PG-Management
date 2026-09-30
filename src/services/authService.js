@@ -1,74 +1,67 @@
-import { readJSON, writeJSON, KEYS } from './localStore.js';
+import {
+  signInWithPassword,
+  signUpWithPassword,
+  signOut,
+  getSession,
+  startSession as dataStartSession,
+  clearSession as dataClearSession,
+  isConfigured as supabaseConfigured,
+} from './supabase.js';
 
 /**
- * A very small gate in front of ID documents.
+ * Auth facade over Supabase Auth (email + password).
  *
- * The PIN is stored only as a salted SHA-256 digest (Web Crypto), never in
- * clear text. This is deliberately modest: anyone with devtools on the device
- * can still get at IndexedDB. It stops casual shoulder-surfing, nothing more.
- * See the README for what to do before putting real Aadhaar/PAN data in here.
+ * Replaces the old local PIN gate, which only hid data on one device. Identity
+ * is now a real account, so the same data follows you across browsers and RLS
+ * can guarantee no one else reads your tenants.
  */
 
-const SESSION_KEY = KEYS.session;
-const PIN_KEY = 'pgm.pin.v1';
-const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
-
-export const DEFAULT_PIN = '1234';
-
-function randomSalt() {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+export function isConfigured() {
+  return supabaseConfigured();
 }
 
-async function hashPin(pin, salt) {
-  const data = new TextEncoder().encode(`${salt}:${pin}`);
-  const digest = await crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+/**
+ * Sign in. Returns `{ user, error }` rather than throwing, so the login screen
+ * can show the message inline.
+ */
+export async function login(email, password) {
+  const { user, error } = await signInWithPassword({
+    email: String(email || '').trim(),
+    password: String(password || ''),
+  });
+  return { user, error };
 }
 
-export function isPinConfigured() {
-  return Boolean(readJSON(PIN_KEY, null));
+/**
+ * Create the account for this email and sign in. If email confirmation is on in
+ * the Supabase project, `pending` is true and no session exists yet.
+ */
+export async function signup(email, password) {
+  const { user, pending, error } = await signUpWithPassword({
+    email: String(email || '').trim(),
+    password: String(password || ''),
+  });
+  return { user, pending, error };
 }
 
-export async function setPin(pin) {
-  const salt = randomSalt();
-  const hash = await hashPin(pin, salt);
-  writeJSON(PIN_KEY, { salt, hash });
-  return true;
+export async function logout() {
+  await signOut();
 }
 
-export async function verifyPin(pin) {
-  const record = readJSON(PIN_KEY, null);
-  // First run: any 4-6 digit PIN works and is then stored as the real one.
-  if (!record) {
-    await setPin(pin);
-    return true;
-  }
-  const hash = await hashPin(pin, record.salt);
-  return hash === record.hash;
-}
-
-export function readSession() {
-  const session = readJSON(SESSION_KEY, null);
-  if (!session?.expiresAt) return null;
-  if (Date.now() > session.expiresAt) {
-    clearSession();
-    return null;
-  }
-  return session;
-}
-
+/**
+ * Test/dev shims kept so nothing that used to call the PIN helpers breaks.
+ * Against a real backend the session is owned by supabase-js, so these are
+ * effectively pass-throughs.
+ */
 export function startSession() {
-  const session = { authenticatedAt: new Date().toISOString(), expiresAt: Date.now() + SESSION_TTL_MS };
-  writeJSON(SESSION_KEY, session);
-  return session;
+  return dataStartSession();
 }
 
 export function clearSession() {
-  try {
-    window.localStorage.removeItem(SESSION_KEY);
-  } catch {
-    /* ignore */
-  }
+  return dataClearSession();
+}
+
+export async function readSession() {
+  const { user } = await getSession();
+  return user ? { authenticatedAt: new Date().toISOString(), user } : null;
 }

@@ -1,4 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+vi.mock('./supabase.js', async () => await import('../test/supabaseFake.js'));
+
+import { resetDatabase } from '../test/supabaseFake.js';
 import {
   normalizeCustomer,
   createCustomer,
@@ -18,7 +22,6 @@ import {
   clearAllCustomers,
 } from './customerService.js';
 import { dayjs } from '../utils/dateLogic.js';
-import { resetStorageCache } from './localStore.js';
 
 const TODAY = dayjs('2024-05-10');
 
@@ -34,8 +37,7 @@ function makeCustomer(overrides = {}) {
 }
 
 beforeEach(() => {
-  resetStorageCache();
-  window.localStorage.clear();
+  resetDatabase();
 });
 
 describe('normalizeCustomer', () => {

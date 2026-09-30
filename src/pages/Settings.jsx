@@ -1,15 +1,28 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { TextField, Textarea } from '../components/FormFields.jsx';
 import { AmountField } from '../components/AmountField.jsx';
-import Modal, { ConfirmDialog } from '../components/Modal.jsx';
+import { ConfirmDialog } from '../components/Modal.jsx';
 import { SettingsIcon, RupeeIcon, LockIcon, IdCardIcon, DownloadIcon } from '../components/icons.jsx';
 import { useData } from '../context/DataContext.jsx';
+import { useAuth } from '../context/AuthContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
-import { authService, seedService, settingsService, imageService, customerService } from '../services/index.js';
-import { formatCurrency, formatBytes } from '../utils/format.js';
+import { seedService, settingsService, backupService, migrationService } from '../services/index.js';
+import { formatCurrency } from '../utils/format.js';
 import { SHARING_TYPES, DEFAULT_TERMS } from '../services/index.js';
 import { Spinner } from '../components/States.jsx';
 import { useInstallPrompt } from '../hooks/useInstallPrompt.js';
+
+/**
+ * Identity of the server-side values the editable fields mirror. Comparing this
+ * instead of object identity keeps an async re-render from overwriting edits.
+ */
+function settingsSignature(settings) {
+  return JSON.stringify([
+    settings.sharingPrices,
+    settings.defaultDeposit,
+    settings.terms,
+  ]);
+}
 
 function Card({ title, description, icon: Icon, children }) {
   return (
@@ -32,6 +45,7 @@ function Card({ title, description, icon: Icon, children }) {
 
 export default function Settings() {
   const { settings, updateSettings, customers, refresh } = useData();
+  const { user, logout } = useAuth();
   const toast = useToast();
 
   const [prices, setPrices] = useState(() => ({ ...settings.sharingPrices }));
@@ -42,29 +56,33 @@ export default function Settings() {
   const [ownerMobile, setOwnerMobile] = useState(settings.ownerMobile);
   const [savingSection, setSavingSection] = useState(null);
 
-  const [pinOpen, setPinOpen] = useState(false);
-  const [newPin, setNewPin] = useState('');
-  const [pinBusy, setPinBusy] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const [confirmSeed, setConfirmSeed] = useState(false);
   const [confirmWipe, setConfirmWipe] = useState(false);
-  const [usage, setUsage] = useState(null);
+  const [confirmImportLocal, setConfirmImportLocal] = useState(false);
+  const fileRef = useRef(null);
   const { canInstall, isIos, installed, promptInstall } = useInstallPrompt();
 
-  // Re-sync when settings change elsewhere (e.g. after a reset).
+  // Settings arrive asynchronously from Supabase, so a re-render can land while
+  // the user is mid-edit. Re-sync the editable fields only when the values they
+  // came from actually change, rather than on every `settings` identity change -
+  // otherwise the load clobbers keystrokes (a half-typed price turning into
+  // 1500016000). An explicit reset/save rewrites the same values, and the
+  // identity check alone would miss it, so track the source signature instead.
+  const signature = settingsSignature(settings);
+  const lastSyncedRef = useRef(signature);
+
   useEffect(() => {
+    if (lastSyncedRef.current === signature) return;
+    lastSyncedRef.current = signature;
     setPrices({ ...settings.sharingPrices });
     setDeposit(settings.defaultDeposit);
     setTerms(settings.terms);
-  }, [settings]);
-
-  useEffect(() => {
-    imageService.getStorageUsage().then(setUsage);
-  }, [customers]);
+  }, [signature, settings]);
 
   const totalMonthly = SHARING_TYPES.reduce((sum, n) => sum + (Number(prices[n]) || 0), 0);
 
-  function savePricing() {
+  async function savePricing() {
     const parsed = {};
     for (const n of SHARING_TYPES) {
       const value = Number(prices[n]);
@@ -76,7 +94,7 @@ export default function Settings() {
     }
     setSavingSection('pricing');
     try {
-      updateSettings({ ...settings, sharingPrices: parsed });
+      await updateSettings({ ...settings, sharingPrices: parsed });
       toast.success('Sharing prices saved. New admissions will use these rates.');
     } catch (error) {
       toast.error(error.message || 'Could not save the prices.');
@@ -85,14 +103,14 @@ export default function Settings() {
     }
   }
 
-  function savePolicy() {
+  async function savePolicy() {
     if (!terms.trim()) {
       toast.error('The Terms & Conditions text cannot be empty.');
       return;
     }
     setSavingSection('policy');
     try {
-      updateSettings({
+      await updateSettings({
         ...settings,
         defaultDeposit: Number(deposit) || 0,
         terms,
@@ -105,24 +123,6 @@ export default function Settings() {
       toast.error(error.message || 'Could not save the settings.');
     } finally {
       setSavingSection(null);
-    }
-  }
-
-  async function savePin() {
-    if (!/^\d{4,6}$/.test(newPin)) {
-      toast.error('PIN must be 4 to 6 digits.');
-      return;
-    }
-    setPinBusy(true);
-    try {
-      await authService.setPin(newPin);
-      setPinOpen(false);
-      setNewPin('');
-      toast.success('PIN updated. You will need it the next time you open the app.');
-    } catch (error) {
-      toast.error(error.message || 'Could not update the PIN.');
-    } finally {
-      setPinBusy(false);
     }
   }
 
@@ -143,10 +143,9 @@ export default function Settings() {
   async function handleWipe() {
     setSavingSection('wipe');
     try {
-      await customerService.clearAllCustomers();
-      await imageService.clearImages();
+      await backupService.wipeEverything();
       await refresh();
-      toast.success('All tenant data erased from this device.');
+      toast.success('All tenant data erased from your account.');
     } catch (error) {
       toast.error(error.message || 'Could not erase the data.');
     } finally {
@@ -155,11 +154,90 @@ export default function Settings() {
     }
   }
 
-  function handleResetSettings() {
-    const defaults = settingsService.resetSettings();
-    updateSettings(defaults);
-    setConfirmReset(false);
-    toast.success('Settings restored to defaults.');
+  async function handleResetSettings() {
+    try {
+      const defaults = await settingsService.resetSettings();
+      await updateSettings(defaults);
+      setConfirmReset(false);
+      toast.success('Settings restored to defaults.');
+    } catch (error) {
+      toast.error(error.message || 'Could not restore the defaults.');
+    }
+  }
+
+  async function handleExport(kind) {
+    setSavingSection(`export-${kind}`);
+    try {
+      const snapshot = await backupService.buildSnapshot();
+      const stamp = snapshot.exportedAt.slice(0, 10);
+      if (kind === 'json') {
+        backupService.downloadText(`pg-manager-${stamp}.json`, backupService.snapshotToJSON(snapshot));
+      } else if (kind === 'tenants') {
+        backupService.downloadText(
+          `pg-manager-tenants-${stamp}.csv`,
+          backupService.customersToCSV(snapshot.customers),
+          'text/csv',
+        );
+      } else {
+        backupService.downloadText(
+          `pg-manager-payments-${stamp}.csv`,
+          backupService.transactionsToCSV(snapshot.transactions),
+          'text/csv',
+        );
+      }
+      toast.success('Backup downloaded.');
+    } catch (error) {
+      toast.error(error.message || 'Could not build the backup.');
+    } finally {
+      setSavingSection(null);
+    }
+  }
+
+  /**
+   * Pull data the previous on-device version left in localStorage into this
+   * account. Conversion is one-way and keeps a copy of the original under
+   * `pgm.backup.v1`, so always confirm first.
+   */
+  async function handleImportLocal() {
+    setSavingSection('import-local');
+    try {
+      const report = await migrationService.runMigration();
+      await refresh();
+      setConfirmImportLocal(false);
+      if (!report.migrated) {
+        toast.info('There is nothing on this device left to import.');
+        return;
+      }
+      toast.success(
+        `Imported ${report.customers} tenants, ${report.cycles} cycles and ${report.transactions} payments from this device.`,
+      );
+    } catch (error) {
+      toast.error(error.message || 'Could not import the on-device data.');
+    } finally {
+      setSavingSection(null);
+    }
+  }
+
+  async function handleImport(event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    setSavingSection('import');
+    try {
+      const snapshot = JSON.parse(await file.text());
+    const counts = await backupService.importSnapshot(snapshot);
+    await refresh();
+    toast.success(
+      `Imported ${counts.customers} tenants, ${counts.cycles} cycles, ${counts.transactions} payments${
+        counts.images ? ` and ${counts.images} documents` : ''
+      }.`,
+    );
+    } catch (error) {
+      toast.error(error.message || 'Could not import that file.');
+    } finally {
+      setSavingSection(null);
+    }
   }
 
   return (
@@ -270,51 +348,92 @@ export default function Settings() {
         </div>
       </Card>
 
-      {/* ------------------------------------------------------ security */}
+      {/* ------------------------------------------------------ account */}
       <Card
-        title="App lock"
-        description="A PIN is required to open the app because Aadhaar and PAN images are stored on this device. This is a deterrent, not encryption."
+        title="Your account"
+        description="Tenant records and ID documents are stored in your own Supabase project and are visible only to this account, enforced by Row Level Security on every table."
         icon={LockIcon}
-      >
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800">
-            PIN is set
-          </span>
-          <button type="button" className="btn-secondary" onClick={() => setPinOpen(true)}>
-            Change PIN
-          </button>
-        </div>
-        <p className="mt-3 text-xs leading-relaxed text-slate-500">
-          Data lives in this browser only. If you move to a shared or cloud-backed device, read the security notes
-          in the README before storing real identity documents.
-        </p>
-      </Card>
-
-      {/* --------------------------------------------------------- data */}
-      <Card
-        title="Data on this device"
-        description="Everything is stored locally. Nothing is uploaded anywhere."
-        icon={IdCardIcon}
       >
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-50 px-3.5 py-3">
-            <div>
-              <p className="text-sm font-semibold text-slate-800">{customers.length} tenant records</p>
-              <p className="text-xs text-slate-500">
-                {usage ? `${formatBytes(usage.usage)} used of roughly ${formatBytes(usage.quota)} available` : 'Calculating storage usage…'}
-              </p>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-slate-800">{user?.email || 'Signed in'}</p>
+              <p className="text-xs text-slate-500">{customers.length} tenant records in this account</p>
             </div>
-            {usage && (
-              <div className="h-2 w-32 overflow-hidden rounded-full bg-slate-200" aria-hidden="true">
-                <div
-                  className="h-full rounded-full bg-brand-500"
-                  style={{ width: `${Math.max(2, Math.min(100, usage.percent * 100))}%` }}
-                />
-              </div>
-            )}
+            <button type="button" className="btn-secondary" onClick={logout}>
+              Sign out
+            </button>
+          </div>
+          <p className="text-xs leading-relaxed text-slate-500">
+            ID documents sit in a private storage bucket and are only ever read through short-lived signed URLs.
+          </p>
+        </div>
+      </Card>
+
+      {/* ---------------------------------------------------- backup / data */}
+      <Card
+        title="Backup & restore"
+        description="Your data is never locked in. Download a full copy, keep it somewhere safe, or import one into a new account."
+        icon={IdCardIcon}
+      >
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => handleExport('json')}
+              disabled={savingSection === 'export-json'}
+            >
+              {savingSection === 'export-json' ? <Spinner className="size-4" /> : null}
+              Download backup (JSON)
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => handleExport('tenants')}
+              disabled={savingSection === 'export-tenants'}
+            >
+              Tenants (CSV)
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => handleExport('payments')}
+              disabled={savingSection === 'export-payments'}
+            >
+              Payments (CSV)
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => fileRef.current?.click()}
+              disabled={savingSection === 'import'}
+            >
+              {savingSection === 'import' ? <Spinner className="size-4" /> : null}
+              Import a backup
+            </button>
+            <input ref={fileRef} type="file" accept="application/json,.json" className="hidden" onChange={handleImport} />
           </div>
 
-          <div className="flex flex-wrap gap-2">
+          {migrationService.needsMigration() && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-amber-50 px-3.5 py-3">
+              <p className="text-xs leading-relaxed text-amber-800">
+                This device still holds data from the older on-device version of the app. Import it into your account to
+                carry it over.
+              </p>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setConfirmImportLocal(true)}
+                disabled={savingSection === 'import-local'}
+              >
+                {savingSection === 'import-local' ? <Spinner className="size-4" /> : null}
+                Import local data
+              </button>
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
             <button type="button" className="btn-secondary" onClick={() => setConfirmSeed(true)} disabled={savingSection === 'seed'}>
               {savingSection === 'seed' ? <Spinner className="size-4" /> : null}
               Add sample tenants
@@ -367,44 +486,8 @@ export default function Settings() {
       </Card>
 
       <p className="pt-2 text-center text-xs text-slate-400">
-        PG Manager · v1.0 · all data is stored locally in this browser
+        PG Manager · v2.0 · data stored in your own Supabase account
       </p>
-
-      {/* -------------------------------------------------------- modals */}
-      <Modal
-        open={pinOpen}
-        onClose={() => setPinOpen(false)}
-        title="Set a new app PIN"
-        description="Choose a 4 to 6 digit PIN."
-        size="sm"
-        footer={
-          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-            <button type="button" className="btn-secondary" onClick={() => setPinOpen(false)} disabled={pinBusy}>
-              Cancel
-            </button>
-            <button type="button" className="btn-primary" onClick={savePin} disabled={pinBusy}>
-              {pinBusy ? 'Saving…' : 'Save PIN'}
-            </button>
-          </div>
-        }
-      >
-        <input
-          type="password"
-          inputMode="numeric"
-          autoFocus
-          maxLength={6}
-          value={newPin}
-          onChange={(e) => setNewPin(e.target.value.replace(/\D/g, ''))}
-          onKeyDown={(e) => e.key === 'Enter' && savePin()}
-          className="field-input text-center text-2xl tracking-[0.5em]"
-          placeholder="••••"
-          aria-label="New PIN"
-        />
-        <p className="mt-3 text-xs leading-relaxed text-slate-500">
-          The app asks for this PIN each time it opens. If you forget it, clear the site data in your browser
-          to reset the app.
-        </p>
-      </Modal>
 
       <ConfirmDialog
         open={confirmReset}
@@ -427,13 +510,23 @@ export default function Settings() {
       />
 
       <ConfirmDialog
+        open={confirmImportLocal}
+        onClose={() => setConfirmImportLocal(false)}
+        onConfirm={handleImportLocal}
+        busy={savingSection === 'import-local'}
+        title="Import data from this device?"
+        confirmLabel="Import"
+        message="Any tenants the older on-device version stored in this browser will be converted and added to your account. A copy of the original is kept on this device. Nothing in your account is changed or deleted."
+      />
+
+      <ConfirmDialog
         open={confirmWipe}
         onClose={() => setConfirmWipe(false)}
         onConfirm={handleWipe}
         busy={savingSection === 'wipe'}
         title="Erase all tenant data?"
         confirmLabel="Erase everything"
-        message={`All ${customers.length} tenant records, their payment history and every uploaded photo or ID document will be permanently deleted from this device. This cannot be undone.`}
+        message={`All ${customers.length} tenant records, their payment history and every uploaded photo or ID document will be permanently deleted from your Supabase account. This cannot be undone - download a backup first if you may need it.`}
       />
     </div>
   );

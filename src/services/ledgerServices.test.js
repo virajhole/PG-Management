@@ -1,5 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { resetStorageCache, writeJSON, KEYS } from './localStore.js';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+vi.mock('./supabase.js', async () => await import('../test/supabaseFake.js'));
+
+import { resetDatabase } from '../test/supabaseFake.js';
 import { createCustomer, getCustomer, clearAllCustomers } from './customerService.js';
 import { ensureOpenCycle, getOpenCycle, listCycles, listCyclesForCustomer, clearAllCycles } from './cycleService.js';
 import { getLightBillForMonth, listLightBills, clearAllLightBills } from './lightBillService.js';
@@ -39,7 +42,7 @@ async function setupCustomer(overrides = {}) {
 }
 
 beforeEach(async () => {
-  resetStorageCache();
+  resetDatabase();
   window.localStorage.clear();
   await clearAllCustomers();
   clearAllCycles();
@@ -350,18 +353,20 @@ describe('migration from the legacy payment model', () => {
   }
 
   beforeEach(() => {
-    resetStorageCache();
+    resetDatabase();
     window.localStorage.clear();
-    clearAllCycles();
-    clearAllTransactions();
   });
+
+  /** The migration still reads the old on-device store, so seed it directly. */
+  const writeLegacyCustomers = (customers) =>
+    window.localStorage.setItem('pgm.customers.v1', JSON.stringify(customers));
 
   it('reports a fresh install as needing migration', () => {
     expect(needsMigration()).toBe(true);
   });
 
   it('converts each due date into its own settled cycle', async () => {
-    writeJSON(KEYS.customers, [legacyCustomer()]);
+    writeLegacyCustomers([legacyCustomer()]);
     const report = await runMigration();
 
     expect(report.migrated).toBe(true);
@@ -380,7 +385,7 @@ describe('migration from the legacy payment model', () => {
   });
 
   it('preserves every payment as a transaction, with date, mode and note', async () => {
-    writeJSON(KEYS.customers, [legacyCustomer()]);
+    writeLegacyCustomers([legacyCustomer()]);
     await runMigration();
 
     const txs = await listTransactions();
@@ -393,23 +398,23 @@ describe('migration from the legacy payment model', () => {
   });
 
   it('keeps the original records in a backup', async () => {
-    writeJSON(KEYS.customers, [legacyCustomer()]);
+    writeLegacyCustomers([legacyCustomer()]);
     await runMigration();
 
     const backup = readBackup();
     expect(backup).not.toBeNull();
     expect(backup.customers[0].payments).toHaveLength(2);
-    expect(backup.toVersion).toBe(2);
+    expect(backup.toVersion).toBe(3);
   });
 
   it('points the customer at the new open cycle', async () => {
-    writeJSON(KEYS.customers, [legacyCustomer()]);
+    writeLegacyCustomers([legacyCustomer()]);
     await runMigration();
     expect((await getCustomer('cus_legacy')).nextDueDate).toBe('2024-06-10');
   });
 
   it('leaves photos and ID proofs alone', async () => {
-    writeJSON(KEYS.customers, [legacyCustomer()]);
+    writeLegacyCustomers([legacyCustomer()]);
     await runMigration();
     const after = await getCustomer('cus_legacy');
     expect(after.photoId).toBe('img_1');
@@ -417,7 +422,7 @@ describe('migration from the legacy payment model', () => {
   });
 
   it('groups two payments for the same due date into one cycle', async () => {
-    writeJSON(KEYS.customers, [
+    writeLegacyCustomers([
       legacyCustomer({
         nextDueDate: '2024-05-10',
         payments: [
@@ -437,7 +442,7 @@ describe('migration from the legacy payment model', () => {
   });
 
   it('applies a legacy surplus to the open cycle', async () => {
-    writeJSON(KEYS.customers, [
+    writeLegacyCustomers([
       legacyCustomer({
         nextDueDate: '2024-06-10',
         payments: [{ id: 'p1', amount: 13500, date: '2024-05-06', mode: 'cash', paidForDueDate: '2024-05-10' }],
@@ -454,7 +459,7 @@ describe('migration from the legacy payment model', () => {
   });
 
   it('holds a legacy surplus bigger than one rent as credit', async () => {
-    writeJSON(KEYS.customers, [
+    writeLegacyCustomers([
       legacyCustomer({
         nextDueDate: '2024-06-10',
         payments: [{ id: 'p1', amount: 30000, date: '2024-05-06', mode: 'cash', paidForDueDate: '2024-05-10' }],
@@ -469,7 +474,7 @@ describe('migration from the legacy payment model', () => {
   });
 
   it('handles a tenant who has never paid', async () => {
-    writeJSON(KEYS.customers, [legacyCustomer({ payments: [] })]);
+    writeLegacyCustomers([legacyCustomer({ payments: [] })]);
     await runMigration();
     const cycles = await listCycles();
     expect(cycles).toHaveLength(1);
@@ -478,7 +483,7 @@ describe('migration from the legacy payment model', () => {
   });
 
   it('runs only once', async () => {
-    writeJSON(KEYS.customers, [legacyCustomer()]);
+    writeLegacyCustomers([legacyCustomer()]);
     const first = await runMigration();
     expect(first.migrated).toBe(true);
 
@@ -493,7 +498,7 @@ describe('migration from the legacy payment model', () => {
   });
 
   it('accepts new payments normally after migrating', async () => {
-    writeJSON(KEYS.customers, [legacyCustomer()]);
+    writeLegacyCustomers([legacyCustomer()]);
     await runMigration();
 
     const { cycle } = await recordRentPayment({ customerId: 'cus_legacy', amount: 4000 });

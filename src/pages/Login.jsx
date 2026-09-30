@@ -4,30 +4,60 @@ import { LockIcon, HomeIcon } from '../components/icons.jsx';
 import { Spinner } from '../components/States.jsx';
 import { useData } from '../context/DataContext.jsx';
 
+/**
+ * Sign in / create account.
+ *
+ * First run of a new install has no account yet, so the same screen offers
+ * "Create account" until a sign-in fails. Identity is a real Supabase account,
+ * which is what lets Row Level Security keep the data private.
+ */
 export default function Login() {
-  const { login, checking, pinSet } = useAuth();
+  const { login, signup, checking, busy, configured } = useAuth();
   const { settings } = useData();
-  const [pin, setPin] = useState('');
+
+  const [mode, setMode] = useState('signin');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const inputRef = useRef(null);
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
+  const canSubmit = configured && email.trim().length > 3 && password.length >= 6 && !busy && !checking;
+
   async function submit(event) {
     event.preventDefault();
-    if (pin.length < 4) {
-      setError('Enter at least 4 digits.');
+    setError('');
+    setNotice('');
+
+    if (!email.includes('@')) {
+      setError('Enter a valid email address.');
       return;
     }
-    const result = await login(pin);
+    if (password.length < 6) {
+      setError('Your password must be at least 6 characters.');
+      return;
+    }
+
+    const result = mode === 'signup' ? await signup(email, password) : await login(email, password);
+
     if (!result.ok) {
+      // A first sign-in attempt failing is usually just "no such account yet".
+      if (mode === 'signin') setMode('signup');
       setError(result.error);
-      setPin('');
-      inputRef.current?.focus();
+      return;
+    }
+
+    if (result.pending) {
+      setNotice('Account created. Check your email for the confirmation link, then sign in.');
+      setMode('signin');
     }
   }
+
+  const isSignup = mode === 'signup';
 
   return (
     <div className="flex min-h-dvh items-center justify-center bg-gradient-to-br from-brand-600 via-brand-700 to-brand-900 px-4 py-10">
@@ -46,52 +76,95 @@ export default function Login() {
               <LockIcon className="size-5" />
             </div>
             <div>
-              <h2 className="text-base font-semibold text-slate-900">Enter your PIN</h2>
+              <h2 className="text-base font-semibold text-slate-900">
+                {isSignup ? 'Create your account' : 'Sign in'}
+              </h2>
               <p className="text-xs text-slate-500">
-                {pinSet ? 'ID documents are stored on this device' : 'First-time setup: choose any 4-6 digit PIN'}
+                {isSignup
+                  ? 'One account per PG. Your tenants stay private to it.'
+                  : 'Your tenant data lives in your own Supabase account'}
               </p>
             </div>
           </div>
 
-          <input
-            ref={inputRef}
-            type="password"
-            inputMode="numeric"
-            autoComplete="current-password"
-            maxLength={6}
-            value={pin}
-            onChange={(e) => {
-              setPin(e.target.value.replace(/\D/g, ''));
-              setError('');
-            }}
-            placeholder="••••"
-            aria-label="PIN"
-            aria-invalid={error ? 'true' : 'false'}
-            className={`field-input text-center text-2xl tracking-[0.4em] ${error ? 'field-input-error' : ''}`}
-          />
-          {error && <p className="field-error text-center">{error}</p>}
+          {!configured && (
+            <div className="mb-4 rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">
+              Supabase is not configured. Copy <span className="font-semibold">.env.example</span> to{' '}
+              <span className="font-semibold">.env</span>, add your project URL and anon key, then restart the
+              dev server.
+            </div>
+          )}
 
-          <button type="submit" className="btn-primary mt-4 w-full" disabled={pin.length < 4 || checking}>
-            {checking ? (
+          <div className="space-y-3">
+            <div>
+              <label htmlFor="email" className="mb-1 block text-xs font-semibold text-slate-700">
+                Email
+              </label>
+              <input
+                id="email"
+                ref={inputRef}
+                type="email"
+                autoComplete="username"
+                value={email}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  setError('');
+                }}
+                placeholder="you@example.com"
+                className={`field-input ${error ? 'field-input-error' : ''}`}
+              />
+            </div>
+
+            <div>
+              <label htmlFor="password" className="mb-1 block text-xs font-semibold text-slate-700">
+                Password
+              </label>
+              <input
+                id="password"
+                type="password"
+                autoComplete={isSignup ? 'new-password' : 'current-password'}
+                value={password}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  setError('');
+                }}
+                placeholder="At least 6 characters"
+                className={`field-input ${error ? 'field-input-error' : ''}`}
+              />
+            </div>
+          </div>
+
+          {error && <p className="field-error mt-2">{error}</p>}
+          {notice && <p className="mt-2 text-xs leading-relaxed text-emerald-700">{notice}</p>}
+
+          <button type="submit" className="btn-primary mt-4 w-full" disabled={!canSubmit}>
+            {busy || checking ? (
               <>
                 <Spinner className="size-4" />
-                Checking…
+                Working…
               </>
+            ) : isSignup ? (
+              'Create account'
             ) : (
-              'Unlock'
+              'Sign in'
             )}
           </button>
 
-          {!pinSet && (
-            <p className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-center text-[11px] leading-relaxed text-amber-800">
-              This PIN is stored on this device only. If you forget it, clear the site data in your browser to
-              reset everything.
-            </p>
-          )}
+          <button
+            type="button"
+            onClick={() => {
+              setMode(isSignup ? 'signin' : 'signup');
+              setError('');
+              setNotice('');
+            }}
+            className="mt-3 w-full text-center text-xs font-semibold text-brand-600 hover:text-brand-700"
+          >
+            {isSignup ? 'Already have an account? Sign in' : 'New here? Create an account'}
+          </button>
         </form>
 
         <p className="mt-6 text-center text-[11px] leading-relaxed text-white/50">
-          All tenant data is stored locally in this browser. Do not use shared devices.
+          Tenant records and ID documents are stored in your own Supabase project. Do not use shared devices.
         </p>
       </div>
     </div>

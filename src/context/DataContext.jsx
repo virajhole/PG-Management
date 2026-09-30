@@ -1,20 +1,20 @@
-import { createContext, useContext, useCallback, useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as customerService from '../services/customerService.js';
 import * as cycleService from '../services/cycleService.js';
 import * as lightBillService from '../services/lightBillService.js';
 import * as transactionService from '../services/transactionService.js';
-import * as migrationService from '../services/migrationService.js';
-import { loadSettings, saveSettings } from '../services/settingsService.js';
-import { ensureSeeded } from '../services/seedService.js';
+import { loadSettings, saveSettings, DEFAULT_SETTINGS } from '../services/settingsService.js';
+import { useOnlineStatus } from '../hooks/useOnlineStatus.js';
+import { useAuth } from './AuthContext.jsx';
 import { dayjs } from '../utils/dateLogic.js';
 import { getPendingList, getOutstandingTotals, getMonthTotal, monthKey } from '../utils/ledger.js';
 
 /**
- * Single source of truth for the whole ledger.
+ * Single source of truth for the whole ledger, read from Supabase.
  *
  * Components call the service functions through this context and re-read
- * afterwards; nothing above this file knows whether records live in
- * localStorage, IndexedDB or a remote API.
+ * afterwards; nothing above this file knows whether records live in Postgres,
+ * a REST API or the fake in-memory database the tests use.
  */
 const DataContext = createContext(null);
 
@@ -23,10 +23,13 @@ export function DataProvider({ children }) {
   const [cycles, setCycles] = useState([]);
   const [lightBills, setLightBills] = useState([]);
   const [transactions, setTransactions] = useState([]);
-  const [settings, setSettings] = useState(() => loadSettings());
+  const [settings, setSettings] = useState(() => ({ ...DEFAULT_SETTINGS }));
   const [status, setStatus] = useState('loading'); // loading | ready | error
   const [error, setError] = useState(null);
   const [today, setToday] = useState(() => dayjs().startOf('day'));
+  const online = useOnlineStatus();
+  const { user, isAuthenticated } = useAuth();
+  const userId = user?.id ?? null;
 
   const refresh = useCallback(async () => {
     try {
@@ -48,26 +51,47 @@ export function DataProvider({ children }) {
     }
   }, []);
 
-  // First load: upgrade old data (if any), seed the demo records on a fresh
-  // install, then read everything back.
+  // First load for the signed-in account: upgrade any leftover on-device data
+  // into it (one time, only if there is some), then read everything back. Note
+  // there is no auto-seeding any more - this is a real ledger, not a demo.
+  //
+  // RLS scopes every query to `auth.uid()`, so this must not run while signed
+  // out. Keying on the user also means signing in reloads the ledger: the
+  // provider sits above the route gate, and a load that happened on the login
+  // screen would only ever see empty results.
   useEffect(() => {
     let cancelled = false;
+
+    if (!isAuthenticated) {
+      setCustomers([]);
+      setCycles([]);
+      setLightBills([]);
+      setTransactions([]);
+      setSettings({ ...DEFAULT_SETTINGS });
+      setError(null);
+      setStatus('ready');
+      return undefined;
+    }
+
     (async () => {
       setStatus('loading');
       try {
-        await migrationService.runMigration();
-        await ensureSeeded();
+        // On-device data is *not* imported automatically: it is a one-way,
+        // user-initiated action offered from Settings, so a stale browser copy
+        // can never quietly change the ledger someone is looking at.
         const [customerList, cycleList, billList, txList] = await Promise.all([
           customerService.listCustomers(),
           cycleService.listCycles(),
           lightBillService.listLightBills(),
           transactionService.listTransactions(),
         ]);
+        const loadedSettings = await loadSettings();
         if (cancelled) return;
         setCustomers(customerList);
         setCycles(cycleList);
         setLightBills(billList);
         setTransactions(txList);
+        setSettings(loadedSettings);
         setStatus('ready');
       } catch (err) {
         if (cancelled) return;
@@ -78,7 +102,16 @@ export function DataProvider({ children }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isAuthenticated, userId]);
+
+  // Coming back online after a dropped connection: whatever was on screen is
+  // stale, so pull the ledger again rather than showing numbers that moved
+  // elsewhere.
+  const wasOnlineRef = useRef(false);
+  useEffect(() => {
+    if (wasOnlineRef.current && online) refresh();
+    wasOnlineRef.current = online;
+  }, [online, refresh]);
 
   // Keep "today" honest if the app stays open across midnight.
   useEffect(() => {
@@ -178,8 +211,8 @@ export function DataProvider({ children }) {
     [refresh],
   );
 
-  const updateSettings = useCallback((next) => {
-    const saved = saveSettings(next);
+  const updateSettings = useCallback(async (next) => {
+    const saved = await saveSettings(next);
     setSettings(saved);
     return saved;
   }, []);
@@ -224,6 +257,7 @@ export function DataProvider({ children }) {
       settings,
       status,
       error,
+      online,
       today,
       openCycleByCustomer,
       pendingList,
@@ -251,6 +285,7 @@ export function DataProvider({ children }) {
       settings,
       status,
       error,
+      online,
       today,
       openCycleByCustomer,
       pendingList,

@@ -1,4 +1,3 @@
-import { readJSON, writeJSON, KEYS, SCHEMA_VERSION } from './localStore.js';
 import { createCustomer, normalizeCustomer } from './customerService.js';
 import { ensureOpenCycle } from './cycleService.js';
 import { recordRentPayment, saveLightBill, recordLightBillPayment } from './transactionService.js';
@@ -6,9 +5,9 @@ import { dayjs } from '../utils/dateLogic.js';
 import { DEFAULT_SETTINGS } from './settingsService.js';
 
 /**
- * Demo data so the whole ledger can be checked the moment the app opens: one
- * overdue tenant with a *partial* rent payment and a pending light bill, a few
- * settled cycles, and transactions dated today and earlier this month. Dates
+ * Demo data so the whole ledger can be checked the moment you press the button:
+ * one overdue tenant with a *partial* rent payment and a pending light bill, a
+ * few settled cycles, and transactions dated today and earlier this month. Dates
  * are generated relative to *today*, so the sample always shows the red /
  * yellow / green coding whenever it is seeded.
  */
@@ -131,7 +130,7 @@ export function buildSampleCustomers() {
 }
 
 /**
- * Insert the samples through the ledger itself (never the old `addPayment`),
+ * Insert the samples through the ledger itself (never the legacy `addPayment`),
  * so the seeded state demonstrates real partial payments, bill entries and a
  * non-empty transaction log.
  *
@@ -239,24 +238,4 @@ export async function seedSampleData() {
   });
 
   return created;
-}
-
-/** Seed once, on first launch only. */
-export async function ensureSeeded() {
-  const alreadySeeded = readJSON(KEYS.seeded, false);
-  const existing = readJSON(KEYS.customers, null);
-  const hasCustomers = Array.isArray(existing) && existing.length > 0;
-  if (alreadySeeded || hasCustomers) return false;
-
-  await seedSampleData();
-  writeJSON(KEYS.seeded, true);
-  // The seeded data is already in the new format - tell the migration it has
-  // nothing to do, or it would see fresh empty-payment customers and duplicate
-  // the cycles this function just created.
-  writeJSON(KEYS.schemaVersion, SCHEMA_VERSION);
-  return true;
-}
-
-export function wasSeeded() {
-  return readJSON(KEYS.seeded, false);
 }

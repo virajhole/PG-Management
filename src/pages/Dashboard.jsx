@@ -63,7 +63,7 @@ export default function Dashboard() {
     return (
       <ErrorState
         title="Could not load your tenants"
-        message={error?.message || 'There was a problem reading the stored data on this device.'}
+        message={error?.message || 'There was a problem reading your data from the cloud.'}
         onRetry={refresh}
       />
     );
@@ -162,7 +162,7 @@ export default function Dashboard() {
       </section>
 
       <p className="pt-2 text-center text-xs text-slate-400">
-        {settings.pgName} · data is stored on this device only
+        {settings.pgName} · stored in your own Supabase account
       </p>
     </div>
   );

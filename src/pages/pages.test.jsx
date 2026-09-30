@@ -1,9 +1,12 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, within, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom/vitest';
 import { MemoryRouter } from 'react-router-dom';
+
+vi.mock('../services/supabase.js', async () => await import('../test/supabaseFake.js'));
+
 import { ToastProvider } from '../context/ToastContext.jsx';
 import { AuthProvider } from '../context/AuthContext.jsx';
 import { DataProvider } from '../context/DataContext.jsx';
@@ -12,16 +15,19 @@ import Settings from './Settings.jsx';
 import Admission from './Admission.jsx';
 import Toaster from '../components/Toaster.jsx';
 import { startSession, clearSession } from '../services/authService.js';
-import { resetStorageCache } from '../services/localStore.js';
-import { resetSettings, DEFAULT_SETTINGS } from '../services/settingsService.js';
-import { clearAllCustomers } from '../services/customerService.js';
-import { KEYS } from '../services/localStore.js';
+import { resetDatabase } from '../test/supabaseFake.js';
+import { loadSettings, DEFAULT_SETTINGS } from '../services/settingsService.js';
+import { listCustomers } from '../services/customerService.js';
+import { seedSampleData } from '../services/seedService.js';
 import { dayjs } from '../utils/dateLogic.js';
 
 /**
  * End-to-end-ish tests through the real components and the real service layer.
- * The point is to prove the wiring works: seeding, colour coding, the payment
+ * The point is to prove the wiring works: the seeded colour coding, the payment
  * roll-forward and the admission form's disabled-submit rule.
+ *
+ * The Supabase data layer is swapped for the in-memory fake, and each test seeds
+ * what it needs up front - the app no longer seeds demo data on boot.
  *
  * Note: the list renders both the mobile cards and the desktop table (CSS
  * decides which is visible), so name queries are scoped to one of them.
@@ -50,17 +56,15 @@ afterEach(() => {
 });
 
 beforeEach(async () => {
-  resetStorageCache();
+  resetDatabase();
   window.localStorage.clear();
   clearSession();
-  await clearAllCustomers();
-  resetSettings();
-  window.localStorage.setItem(KEYS.seeded, 'false');
-  startSession(); // skip the PIN gate for these tests
+  startSession(); // skip the sign-in gate for these tests
+  await seedSampleData();
 });
 
 describe('Dashboard', () => {
-  it('seeds demo tenants and shows all three colour states', async () => {
+  it('shows all three colour states for the seeded tenants', async () => {
     renderApp(<Dashboard />);
     const cards = await list();
 
@@ -197,7 +201,7 @@ describe('Settings', () => {
     await user.click(screen.getByRole('button', { name: 'Save prices' }));
 
     expect(await screen.findByText(/Sharing prices saved/)).toBeInTheDocument();
-    expect(JSON.parse(window.localStorage.getItem(KEYS.settings)).sharingPrices['2']).toBe(16000);
+    expect((await loadSettings()).sharingPrices['2']).toBe(16000);
   });
 
   it('saves an edited default deposit and terms text', async () => {
@@ -215,7 +219,7 @@ describe('Settings', () => {
     await user.click(screen.getByRole('button', { name: 'Save settings' }));
     expect(await screen.findByText('Settings saved.')).toBeInTheDocument();
 
-    const stored = JSON.parse(window.localStorage.getItem(KEYS.settings));
+    const stored = await loadSettings();
     expect(stored.defaultDeposit).toBe(7500);
     expect(stored.terms).toBe('Be nice.');
   });
@@ -350,8 +354,7 @@ describe('Admission form', () => {
 
     expect(await screen.findByText(/Test Person admitted/)).toBeInTheDocument();
 
-    const stored = JSON.parse(window.localStorage.getItem(KEYS.customers));
-    const created = stored.find((c) => c.name === 'Test Person');
+    const created = (await listCustomers()).find((c) => c.name === 'Test Person');
     expect(created.nextDueDate).toBe(dayjs().subtract(1, 'month').date(15).format('YYYY-MM-DD'));
     expect(created.dueDay).toBe(15);
     expect(created.termsAccepted).toBe(true);
@@ -373,8 +376,7 @@ describe('Admission form', () => {
     await user.click(screen.getByRole('button', { name: /Complete admission/ }));
     await screen.findByText(/Test Person admitted/);
 
-    const stored = JSON.parse(window.localStorage.getItem(KEYS.customers));
-    const created = stored.find((c) => c.name === 'Test Person');
+    const created = (await listCustomers()).find((c) => c.name === 'Test Person');
     // The 31st must clamp to the last day of whatever month we land in,
     // never spill over into the next month.
     const due = dayjs(created.nextDueDate);

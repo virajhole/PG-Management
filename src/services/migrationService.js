@@ -1,34 +1,69 @@
-import { readJSON, writeJSON, KEYS, SCHEMA_VERSION } from './localStore.js';
+import { TABLES, insertRow, getRow, updateRow } from './supabase.js';
 import { normalizeCustomer } from './customerService.js';
 import { createCycle } from './cycleService.js';
 import { createId, nowISO, todayISO, advanceDueDate, dayjs } from '../utils/dateLogic.js';
 import { statusFor, getRemaining, toAmount, monthKey, TX_RENT } from '../utils/ledger.js';
 
 /**
- * One-time upgrade from the pre-ledger data model to the cycle/transaction model.
+ * One-time upgrade from the pre-ledger localStorage data model into Supabase.
  *
  * The old model stored a flat `payments` array per tenant and advanced
  * `nextDueDate` on *every* payment, so a second payment in the same month was
  * silently attributed to the following cycle and partial payment could not be
- * expressed at all. This converts what is there into real cycles.
+ * expressed at all. This converts what is on the device into real cycles and
+ * transactions in the cloud.
  *
  * Guarantees:
- *   - the untouched original records are copied to KEYS.backup first
+ *   - the untouched original records are copied to the local backup key first
  *   - it is idempotent: guarded by KEYS.schemaVersion, so it runs at most once
  *   - a tenant's payment history, dates, modes and notes are preserved one to one
- *   - photos and ID proofs (IndexedDB) are never read or written
- *   - the legacy `payments` array is left in place as a safety net; nothing
- *     reads it any more
+ *   - already-imported ids are skipped, so a half-finished run can be repeated
  */
 
+const SCHEMA_VERSION = 3;
+
+// The legacy on-device store is the only thing still read from localStorage:
+// it is the source for a one-time upgrade, and nothing else reads it.
+const LEGACY_KEYS = {
+  customers: 'pgm.customers.v1',
+  schemaVersion: 'pgm.schemaVersion',
+  backup: 'pgm.backup.v1',
+};
+
+function storage() {
+  try {
+    return typeof window !== 'undefined' ? window.localStorage : null;
+  } catch {
+    return null;
+  }
+}
+
 function readVersion() {
-  const raw = readJSON(KEYS.schemaVersion, 0);
-  const n = Number(raw);
+  const n = Number(readJSON(LEGACY_KEYS.schemaVersion, 0));
   return Number.isFinite(n) ? n : 0;
 }
 
+function readJSON(key, fallback) {
+  try {
+    const raw = storage()?.getItem(key);
+    if (raw === null || raw === undefined) return fallback;
+    return JSON.parse(raw) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJSON(key, value) {
+  try {
+    storage()?.setItem(key, JSON.stringify(value));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function readCustomers() {
-  const stored = readJSON(KEYS.customers, []);
+  const stored = readJSON(LEGACY_KEYS.customers, []);
   return Array.isArray(stored) ? stored.map(normalizeCustomer) : [];
 }
 
@@ -72,7 +107,6 @@ function migrateCustomer(customer) {
       remainingAmount: getRemaining({ rentAmount, paidAmount }),
       status: statusFor({ rentAmount, paidAmount }),
       settledAt: paidAmount >= rentAmount ? group.payments[group.payments.length - 1]?.createdAt || nowISO() : null,
-      // Marks these as converted rather than entered in the app.
       migratedFrom: 'legacy',
       createdAt: group.payments[0]?.createdAt || nowISO(),
       updatedAt: nowISO(),
@@ -156,57 +190,58 @@ export async function runMigration() {
   const fromVersion = readVersion();
 
   // Snapshot before touching anything, so a bad conversion is always reversible
-  // by hand from `pgm.backup.v1`.
-  if (readJSON(KEYS.backup, null) === null) {
-    writeJSON(KEYS.backup, {
-      savedAt: nowISO(),
-      fromVersion,
-      toVersion: SCHEMA_VERSION,
-      customers: readJSON(KEYS.customers, []),
-    });
-  }
+  // by hand from `pgm.backup.v1`. Write it fresh every run: if an earlier attempt
+  // failed part-way, the older snapshot would be the state we are recovering
+  // from, not the state we are converting.
+  writeJSON(LEGACY_KEYS.backup, {
+    savedAt: nowISO(),
+    fromVersion,
+    toVersion: SCHEMA_VERSION,
+    customers: readJSON(LEGACY_KEYS.customers, []),
+  });
 
-  const allCycles = readJSON(KEYS.cycles, []);
-  const allTransactions = readJSON(KEYS.transactions, []);
-  const existingCycleIds = new Set((Array.isArray(allCycles) ? allCycles : []).map((c) => c.id));
+  let cycleCount = 0;
+  let transactionCount = 0;
 
   for (const customer of customers) {
     const result = migrateCustomer(customer);
 
-    // Persist via the service so normalization stays in one place.
-    for (const cycle of result.cycles) {
-      if (existingCycleIds.has(cycle.id)) continue;
-      const created = await createCycle(cycle);
-      existingCycleIds.add(created.id);
+    // Upsert the tenant, then persist the converted cycles/transactions through
+    // the same service writes the rest of the app uses.
+    const existing = await getRow(TABLES.customers, customer.id);
+    if (existing) {
+      await updateRow(TABLES.customers, customer.id, { ...customer, ...result.customerPatch });
+    } else {
+      await insertRow(TABLES.customers, { ...customer, ...result.customerPatch });
     }
 
-    allTransactions.push(...result.transactions);
-    customer.nextDueDate = result.customerPatch.nextDueDate;
-    customer.advanceCredit = result.customerPatch.advanceCredit;
-    customer.updatedAt = nowISO();
+    for (const cycle of result.cycles) {
+      await createCycle(cycle);
+      cycleCount += 1;
+    }
+
+    for (const transaction of result.transactions) {
+      await insertRow(TABLES.transactions, transaction);
+      transactionCount += 1;
+    }
   }
 
-  if (customers.length) {
-    writeJSON(KEYS.customers, customers);
-  }
-  writeJSON(KEYS.cycles, existingCycleIds.size ? readJSON(KEYS.cycles, []) : []);
-  writeJSON(KEYS.transactions, allTransactions);
-  writeJSON(KEYS.schemaVersion, SCHEMA_VERSION);
+  writeJSON(LEGACY_KEYS.schemaVersion, SCHEMA_VERSION);
 
   return {
     migrated: true,
     fromVersion,
     toVersion: SCHEMA_VERSION,
     customers: customers.length,
-    cycles: existingCycleIds.size,
-    transactions: allTransactions.length,
+    cycles: cycleCount,
+    transactions: transactionCount,
     backedUp: true,
   };
 }
 
 /** Test/debug helper: the untouched pre-ledger snapshot, if one exists. */
 export function readBackup() {
-  return readJSON(KEYS.backup, null);
+  return readJSON(LEGACY_KEYS.backup, null);
 }
 
 export { monthKey, dayjs };

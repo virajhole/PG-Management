@@ -13,8 +13,9 @@
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.1",
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.117.2",
     "dayjs": "^1.11.23",
-    "idb": "^8.0.3",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-hook-form": "^7.89.0",
@@ -31,7 +32,6 @@
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
     "@vitest/ui": "^5.0.2",
-    "fake-indexeddb": "^6.2.5",
     "happy-dom": "^20.14.5",
     "oxlint": "^1.81.0",
     "tailwindcss": "^4.3.3",

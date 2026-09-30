@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { getImage } from '../services/imageService.js';
 
 /**
- * Resolve an IndexedDB image key to a displayable data URL.
+ * Resolve a stored image path to a displayable signed URL.
  * Returns `{ url, loading, error }`; pass `null` to get a permanent "no image".
  */
 export function useImageUrl(imageId) {

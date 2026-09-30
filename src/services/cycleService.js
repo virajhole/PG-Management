@@ -1,13 +1,13 @@
-import { readJSON, writeJSON, removeKey, KEYS } from './localStore.js';
+import { TABLES, listRows, getRow, insertRow, updateRow, deleteRow, deleteRowsWhere, clearTable } from './supabase.js';
 import { createId, nowISO, todayISO, dayjs } from '../utils/dateLogic.js';
 import { getRemaining, statusFor, money, toAmount, monthKey } from '../utils/ledger.js';
 
 /**
- * Rent cycles - one row per tenant per month.
+ * Rent cycles - one row per tenant per month, stored in Supabase.
  *
- * This module is the only writer of `KEYS.cycles`. Everything is async on
- * purpose, so a later move to a REST/Firestore backend is a reimplementation of
- * this file and nothing else has to change.
+ * This module is the only writer of the `rent_cycles` table. Everything is async
+ * on purpose, and every call goes through the tiny query surface in supabase.js,
+ * so swapping the backend (or mocking it in tests) is a one-file change.
  *
  * A tenant always has exactly one *open* cycle (status pending or partial) - that
  * is the one the dashboard shows and the one payments are applied to. Settling
@@ -25,8 +25,7 @@ export function normalizeCycle(raw = {}) {
     dueDate: raw.dueDate || todayISO(),
     rentAmount,
     paidAmount,
-    // `remainingAmount` is derived; it is stored so exports and reports can be
-    // read without re-running the maths, but getRemaining() is the source.
+    // `remainingAmount` is derived; getRemaining() is the source of truth.
     remainingAmount: remaining,
     status: statusFor({ rentAmount, paidAmount }),
     settledAt: raw.settledAt ?? null,
@@ -35,24 +34,13 @@ export function normalizeCycle(raw = {}) {
   };
 }
 
-function readAll() {
-  const stored = readJSON(KEYS.cycles, []);
-  if (!Array.isArray(stored)) return [];
-  return stored.map(normalizeCycle);
-}
-
-function writeAll(cycles) {
-  writeJSON(KEYS.cycles, cycles);
-  return cycles;
-}
-
 export async function listCycles() {
-  return readAll();
+  return (await listRows(TABLES.cycles)).map(normalizeCycle);
 }
 
 /** Cycles for one tenant, newest due date last (history reads bottom-up). */
 export async function listCyclesForCustomer(customerId) {
-  return readAll()
+  return (await listCycles())
     .filter((cycle) => cycle.customerId === customerId)
     .sort((a, b) => (a.dueDate < b.dueDate ? 1 : -1));
 }
@@ -62,7 +50,7 @@ export async function listCyclesForCustomer(customerId) {
  * Returns null only if the tenant has somehow been left with no open cycle.
  */
 export async function getOpenCycle(customerId) {
-  const cycles = readAll().filter((cycle) => cycle.customerId === customerId);
+  const cycles = (await listCycles()).filter((cycle) => cycle.customerId === customerId);
   if (cycles.length === 0) return null;
   const open = cycles.filter((cycle) => cycle.status !== 'paid');
   const pool = open.length > 0 ? open : cycles;
@@ -70,7 +58,8 @@ export async function getOpenCycle(customerId) {
 }
 
 export async function getCycle(id) {
-  return readAll().find((cycle) => cycle.id === id) ?? null;
+  const row = await getRow(TABLES.cycles, id);
+  return row ? normalizeCycle(row) : null;
 }
 
 /** Create (or return) the open cycle for a tenant. */
@@ -85,29 +74,23 @@ export async function ensureOpenCycle(customer) {
 }
 
 export async function createCycle({ customerId, dueDate, rentAmount, paidAmount = 0 }) {
-  const cycles = readAll();
   const cycle = normalizeCycle({ customerId, dueDate, rentAmount, paidAmount });
-  cycles.push(cycle);
-  writeAll(cycles);
-  return cycle;
+  return normalizeCycle(await insertRow(TABLES.cycles, cycle));
 }
 
-/** Overwrite one cycle by id, keeping the stored remaining/status in step. */
+/** Overwrite one cycle by id; the DB recomputes remaining/status from the amounts. */
 export async function updateCycle(id, patch) {
-  const cycles = readAll();
-  const index = cycles.findIndex((cycle) => cycle.id === id);
-  if (index === -1) throw new Error('Rent cycle not found.');
+  const existing = await getCycle(id);
+  if (!existing) throw new Error('Rent cycle not found.');
 
-  const updated = normalizeCycle({ ...cycles[index], ...patch, id, updatedAt: nowISO() });
-  cycles[index] = updated;
-  writeAll(cycles);
-  return updated;
+  const merged = normalizeCycle({ ...existing, ...patch, id, updatedAt: nowISO() });
+  return normalizeCycle(await updateRow(TABLES.cycles, id, merged));
 }
 
 /**
  * Re-derive paid/remaining/status from a fresh set of payment amounts.
- * Used after a transaction is deleted, so the balance can never drift from the
- * transactions that justify it.
+ * Used after a transaction is deleted, so balances can never drift from the
+ * transactions that justify them.
  */
 export async function recomputeCycleFromPayments(id, payments) {
   const cycle = await getCycle(id);
@@ -127,19 +110,19 @@ export async function updateOpenCycleAmount(customerId, rentAmount) {
 }
 
 export async function deleteCycle(id) {
-  writeAll(readAll().filter((cycle) => cycle.id !== id));
+  await deleteRow(TABLES.cycles, id);
   return true;
 }
 
 /** Remove every cycle a deleted customer leaves behind. */
 export async function deleteCyclesForCustomer(customerId) {
-  writeAll(readAll().filter((cycle) => cycle.customerId !== customerId));
+  await deleteRowsWhere(TABLES.cycles, 'customerId', customerId);
   return true;
 }
 
-/** Used by the wipe in Settings and by the migration. */
+/** Used by the wipe in Settings and by test resets. */
 export async function clearAllCycles() {
-  removeKey(KEYS.cycles);
+  await clearTable(TABLES.cycles);
   return [];
 }
 

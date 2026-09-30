@@ -1,4 +1,5 @@
-import { readJSON, writeJSON, removeKey, KEYS } from './localStore.js';
+import { TABLES, listRows, getRow, insertRow, updateRow, deleteRow, deleteRowsWhere, clearTable } from './supabase.js';
+import * as imageService from './imageService.js';
 import {
   createId,
   getNextDueDate,
@@ -11,18 +12,17 @@ import {
   todayISO,
   dayjs,
 } from '../utils/dateLogic.js';
-import { putImage, getImage, deleteImage } from './imageService.js';
 
 /**
- * Customer persistence.
+ * Customer persistence on Supabase.
  *
  * This module is the *only* place that knows where records live. Every export is
- * async, so swapping localStorage for Firestore or a Node/Mongo API later means
- * reimplementing these functions and changing nothing above this layer.
+ * async and returns the same normalized camelCase shapes the UI always spoke, so
+ * nothing above this layer had to change when storage moved off the device.
  *
  *   listCustomers / getCustomer / createCustomer / updateCustomer /
  *   deleteCustomer / addPayment / removePayment /
- *   getCustomerImage / setCustomerImage / clearAllData
+ *   getCustomerImage / setCustomerImage / clearAllCustomers
  */
 
 const SORT_WEIGHT = { overdue: 0, soon: 1, ok: 2 };
@@ -67,17 +67,6 @@ export function normalizeCustomer(raw = {}) {
   };
 }
 
-function readAll() {
-  const stored = readJSON(KEYS.customers, []);
-  if (!Array.isArray(stored)) return [];
-  return stored.map(normalizeCustomer);
-}
-
-function writeAll(customers) {
-  writeJSON(KEYS.customers, customers);
-  return customers;
-}
-
 /**
  * Derive the next PG-000N code from what already exists, so codes stay unique
  * even after deletions or across a re-seed.
@@ -89,6 +78,7 @@ function nextCustomerCode(existing) {
   }, 0);
   return `PG-${String(max + 1).padStart(4, '0')}`;
 }
+
 // ---------------------------------------------------------------- selectors
 
 /** 'overdue' | 'soon' | 'ok' for a customer, based on the next rent due date. */
@@ -185,18 +175,18 @@ export function summarise(list, today = dayjs()) {
 // ------------------------------------------------------------------ queries
 
 export async function listCustomers() {
-  // Async on purpose: a network backend would be a fetch here.
-  return readAll();
+  return (await listRows(TABLES.customers)).map(normalizeCustomer);
 }
 
 export async function getCustomer(id) {
-  return readAll().find((c) => c.id === id) ?? null;
+  const row = await getRow(TABLES.customers, id);
+  return row ? normalizeCustomer(row) : null;
 }
 
 // ----------------------------------------------------------------- mutations
 
 export async function createCustomer(data) {
-  const all = readAll();
+  const all = await listCustomers();
   const dueDay = Number(data.dueDay) || dayjs(data.joiningDate || todayISO()).date();
   const customer = normalizeCustomer({
     ...data,
@@ -205,40 +195,37 @@ export async function createCustomer(data) {
     code: data.code || nextCustomerCode(all),
     createdAt: nowISO(),
   });
-  all.push(customer);
-  writeAll(all);
-  return customer;
+  return insertRow(TABLES.customers, customer);
 }
 
 export async function updateCustomer(id, patch) {
-  const all = readAll();
-  const index = all.findIndex((c) => c.id === id);
-  if (index === -1) throw new Error('Customer not found.');
+  const existing = await getCustomer(id);
+  if (!existing) throw new Error('Customer not found.');
 
-  const merged = normalizeCustomer({ ...all[index], ...patch, id, updatedAt: nowISO() });
+  const merged = normalizeCustomer({ ...existing, ...patch, id, updatedAt: nowISO() });
 
   // Re-derive the due anchor + date when the joining date or rent anchor moved.
-  if (patch.joiningDate && patch.joiningDate !== all[index].joiningDate) {
+  if (patch.joiningDate && patch.joiningDate !== existing.joiningDate) {
     merged.dueDay = Number(patch.dueDay) || dayjs(patch.joiningDate).date();
     merged.nextDueDate = getNextDueDate(patch.joiningDate, 1, merged.dueDay);
-  } else if (patch.dueDay && patch.dueDay !== all[index].dueDay && !patch.nextDueDate) {
+  } else if (patch.dueDay && patch.dueDay !== existing.dueDay && !patch.nextDueDate) {
     merged.nextDueDate = getNextDueDate(merged.joiningDate, 1, merged.dueDay);
   }
 
-  all[index] = merged;
-  writeAll(all);
-  return merged;
+  return updateRow(TABLES.customers, id, merged);
 }
 
 export async function deleteCustomer(id) {
-  const all = readAll();
-  const target = all.find((c) => c.id === id);
-  if (!target) throw new Error('Customer not found.');
+  const customer = await getCustomer(id);
+  if (!customer) throw new Error('Customer not found.');
 
   // Best-effort cleanup; a failed image delete must not block the record delete.
-  await Promise.allSettled([deleteImage(target.photoId), deleteImage(target.proofImageId)]);
+  await Promise.allSettled([
+    imageService.deleteImage(customer.photoId),
+    imageService.deleteImage(customer.proofImageId),
+  ]);
 
-  writeAll(all.filter((c) => c.id !== id));
+  await deleteRow(TABLES.customers, id);
   return true;
 }
 
@@ -246,13 +233,15 @@ export async function deleteCustomer(id) {
  * Record a rent payment and roll the due date forward one month from the
  * *current* due date, so an overdue tenant catches up month by month instead of
  * jumping ahead. The day-of-month anchor is preserved.
+ *
+ * Note: the ledger's real source of truth is transactions + cycles (see
+ * transactionService). This legacy helper appends to the customer's `payments`
+ * array for migration/import fidelity - the UI no longer uses it.
  */
 export async function addPayment(id, { amount, date, mode = 'cash', note = '' }) {
-  const all = readAll();
-  const index = all.findIndex((c) => c.id === id);
-  if (index === -1) throw new Error('Customer not found.');
+  const customer = await getCustomer(id);
+  if (!customer) throw new Error('Customer not found.');
 
-  const customer = all[index];
   const payment = {
     id: createId('pay'),
     amount: Number(amount) || 0,
@@ -264,37 +253,35 @@ export async function addPayment(id, { amount, date, mode = 'cash', note = '' })
     createdAt: nowISO(),
   };
 
-  const updated = {
+  const updated = normalizeCustomer({
     ...customer,
     payments: [...customer.payments, payment],
     nextDueDate: advanceDueDate(customer.nextDueDate, 1, customer.dueDay),
     depositPaid: customer.depositPaid || false,
     updatedAt: nowISO(),
-  };
+  });
 
-  all[index] = updated;
-  writeAll(all);
+  await updateRow(TABLES.customers, id, updated);
   return { customer: updated, payment };
 }
 
 export async function removePayment(id, paymentId) {
-  const all = readAll();
-  const index = all.findIndex((c) => c.id === id);
-  if (index === -1) throw new Error('Customer not found.');
+  const customer = await getCustomer(id);
+  if (!customer) throw new Error('Customer not found.');
 
-  const updated = { ...all[index], payments: all[index].payments.filter((p) => p.id !== paymentId) };
-  all[index] = updated;
-  writeAll(all);
+  const updated = normalizeCustomer({
+    ...customer,
+    payments: customer.payments.filter((p) => p.id !== paymentId),
+  });
+  await updateRow(TABLES.customers, id, updated);
   return updated;
 }
 
 export async function toggleDepositPaid(id) {
-  const all = readAll();
-  const index = all.findIndex((c) => c.id === id);
-  if (index === -1) throw new Error('Customer not found.');
-  const updated = { ...all[index], depositPaid: !all[index].depositPaid, updatedAt: nowISO() };
-  all[index] = updated;
-  writeAll(all);
+  const customer = await getCustomer(id);
+  if (!customer) throw new Error('Customer not found.');
+  const updated = normalizeCustomer({ ...customer, depositPaid: !customer.depositPaid, updatedAt: nowISO() });
+  await updateRow(TABLES.customers, id, updated);
   return updated;
 }
 
@@ -306,27 +293,30 @@ export async function setCustomerStatus(id, status) {
 
 export async function setCustomerImage(id, kind, dataUrl) {
   const field = kind === 'photo' ? 'photoId' : 'proofImageId';
-  const all = readAll();
-  const index = all.findIndex((c) => c.id === id);
-  if (index === -1) throw new Error('Customer not found.');
+  const customer = await getCustomer(id);
+  if (!customer) throw new Error('Customer not found.');
 
-  const previous = all[index][field];
+  const previous = customer[field];
   const imageId = createId('img');
-  await putImage(imageId, dataUrl);
-  if (previous) await deleteImage(previous).catch(() => {});
+  // The stored value is a storage path (private bucket); the data layer hides
+  // the owner-scoped prefix.
+  const path = `c/${id}/${kind}/${imageId}.jpg`;
+  await imageService.putImage(path, dataUrl);
+  if (previous) await imageService.deleteImage(previous).catch(() => {});
 
-  all[index] = { ...all[index], [field]: imageId, updatedAt: nowISO() };
-  writeAll(all);
-  return all[index];
+  return updateCustomer(id, { [field]: path });
 }
 
+/** Resolve an image path to a signed URL (see useImageUrl). */
 export function getCustomerImage(imageId) {
-  return getImage(imageId);
+  return imageService.getImage(imageId);
 }
 
 // ------------------------------------------------------------------- resets
 
 export async function clearAllCustomers() {
-  removeKey(KEYS.customers);
+  await clearTable(TABLES.customers);
   return [];
 }
+
+export { deleteRowsWhere as deleteCustomersWhere };

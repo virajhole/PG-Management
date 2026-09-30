@@ -1,7 +1,7 @@
-import { readJSON, writeJSON, KEYS } from './localStore.js';
+import { getSettings as readSettingsRow, saveSettingsRow as writeSettingsRow } from './supabase.js';
 
 /**
- * Admin-configurable pricing + policy text.
+ * Admin-configurable pricing + policy text - now stored in Supabase.
  * The admission form reads these as its defaults; every field stays overridable
  * per customer.
  */
@@ -66,27 +66,31 @@ export const DEFAULT_SETTINGS = {
   currencyNote: '',
 };
 
-export function loadSettings() {
-  const stored = readJSON(KEYS.settings, null);
-  if (!stored || typeof stored !== 'object') return { ...DEFAULT_SETTINGS };
-  return {
-    ...DEFAULT_SETTINGS,
-    ...stored,
-    sharingPrices: { ...DEFAULT_SETTINGS.sharingPrices, ...(stored.sharingPrices || {}) },
-  };
+export async function loadSettings() {
+  try {
+    const stored = await readSettingsRow();
+    if (!stored) return { ...DEFAULT_SETTINGS };
+    return {
+      ...DEFAULT_SETTINGS,
+      ...stored,
+      sharingPrices: { ...DEFAULT_SETTINGS.sharingPrices, ...(stored.sharingPrices || {}) },
+    };
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
 }
 
-export function saveSettings(settings) {
+export async function saveSettings(settings) {
   const merged = {
     ...settings,
     sharingPrices: { ...settings.sharingPrices },
   };
-  writeJSON(KEYS.settings, merged);
+  await writeSettingsRow(merged);
   return merged;
 }
 
-export function resetSettings() {
-  writeJSON(KEYS.settings, DEFAULT_SETTINGS);
+export async function resetSettings() {
+  await writeSettingsRow({ ...DEFAULT_SETTINGS });
   return { ...DEFAULT_SETTINGS };
 }
 
