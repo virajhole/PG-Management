@@ -1,19 +1,29 @@
 import {
   signInWithPassword,
   signUpWithPassword,
+  signInWithGoogle,
   signOut,
   getSession,
+  resolveAccess,
+  inspectAllowlist,
+  isAdminEmail,
+  listAdmins,
+  addAdmin,
+  removeAdmin,
+  bootstrapOwner,
   startSession as dataStartSession,
   clearSession as dataClearSession,
   isConfigured as supabaseConfigured,
 } from './supabase.js';
 
 /**
- * Auth facade over Supabase Auth (email + password).
+ * Auth facade over Supabase Auth.
  *
+ * Google OAuth is the primary path; email + password stays as the fallback.
  * Replaces the old local PIN gate, which only hid data on one device. Identity
- * is now a real account, so the same data follows you across browsers and RLS
- * can guarantee no one else reads your tenants.
+ * is now a real account, so the same data follows you across browsers, RLS
+ * guarantees no one else reads your tenants, and the `admins` allowlist decides
+ * who is allowed to read anything at all.
  */
 
 export function isConfigured() {
@@ -49,12 +59,23 @@ export async function logout() {
 }
 
 /**
+ * Hand off to Google. Returns `{ error }`: on success the browser is already
+ * navigating to Google and the session arrives later through onAuthStateChange.
+ */
+export async function loginWithGoogle(redirectTo) {
+  const { error } = await signInWithGoogle({ redirectTo });
+  return { error };
+}
+
+export { resolveAccess, isAdminEmail, listAdmins, addAdmin, removeAdmin, bootstrapOwner };
+
+/**
  * Test/dev shims kept so nothing that used to call the PIN helpers breaks.
  * Against a real backend the session is owned by supabase-js, so these are
  * effectively pass-throughs.
  */
-export function startSession() {
-  return dataStartSession();
+export function startSession(user) {
+  return user ? dataStartSession(user) : dataStartSession();
 }
 
 export function clearSession() {

@@ -4,7 +4,7 @@ const TONES = {
   success: 'border-emerald-200 bg-emerald-50 text-emerald-900',
   error: 'border-red-200 bg-red-50 text-red-900',
   warning: 'border-amber-200 bg-amber-50 text-amber-900',
-  info: 'border-slate-200 bg-white text-slate-900',
+  info: 'border-line bg-raised text-ink',
 };
 
 const ICONS = {
@@ -59,6 +59,18 @@ export default function Toaster() {
             {ICONS[toast.type] ?? ICONS.info}
           </svg>
           <p className="flex-1 text-sm leading-snug font-medium break-words">{toast.message}</p>
+          {toast.action && (
+            <button
+              type="button"
+              onClick={() => {
+                toast.action.onClick?.();
+                dismiss(toast.id);
+              }}
+              className="shrink-0 rounded-lg bg-black/10 px-2.5 py-1 text-xs font-bold uppercase tracking-wide hover:bg-black/20 dark:bg-white/10 dark:hover:bg-white/20"
+            >
+              {toast.action.label}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => dismiss(toast.id)}

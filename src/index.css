@@ -1,22 +1,121 @@
 @import 'tailwindcss';
 
+/* Tailwind v4 has no `darkMode: 'class'` config key - class-based dark mode is
+   declared here instead. `dark:` utilities only apply under `.dark`. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ---------------------------------------------------------------- fonts */
+/* Plus Jakarta Sans (Google Fonts, display=swap). Font files are cached by the
+   browser; the service worker shell cache covers repeat launches. */
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url('https://fonts.gstatic.com/s/plusjakartasans/v8/LDIbaomQNQcsA88c7O9yZ4KMCoOg4IA6-91aHEjcWuA_qU79TEY.woff2')
+    format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215;
+}
+
 /* ---------------------------------------------------------------- theme */
+/* Brand ramp: indigo -> violet. `accent` is teal, reserved for positive/health. */
 @theme {
-  --color-brand-50: #eef4ff;
-  --color-brand-100: #dae4ff;
-  --color-brand-200: #bccfff;
-  --color-brand-300: #8eaeff;
-  --color-brand-400: #5a83fd;
-  --color-brand-500: #345dfb;
-  --color-brand-600: #1f3cf4;
-  --color-brand-700: #1a2fe1;
-  --color-brand-800: #1c29b6;
-  --color-brand-900: #1d2c8f;
-  --color-brand-950: #151b57;
+  --color-brand-50: #eef2ff;
+  --color-brand-100: #e0e7ff;
+  --color-brand-200: #c7d2fe;
+  --color-brand-300: #a5b4fc;
+  --color-brand-400: #818cf8;
+  --color-brand-500: #6366f1;
+  --color-brand-600: #4f46e5;
+  --color-brand-700: #4338ca;
+  --color-brand-800: #3730a3;
+  --color-brand-900: #312e81;
+  --color-brand-950: #1e1b4b;
+
+  --color-violet-brand: #7c3aed;
+  --color-accent-50: #f0fdfa;
+  --color-accent-100: #ccfbf1;
+  --color-accent-200: #99f6e4;
+  --color-accent-300: #5eead4;
+  --color-accent-400: #2dd4bf;
+  --color-accent-500: #14b8a6;
+  --color-accent-600: #0d9488;
+  --color-accent-700: #0f766e;
+  --color-accent-900: #134e4a;
 
   --font-sans:
-    'Inter var', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
-    sans-serif;
+    'Plus Jakarta Sans', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+
+  --radius-card: 1rem;
+  --shadow-soft: 0 1px 2px rgb(15 23 42 / 0.04), 0 4px 16px -4px rgb(15 23 42 / 0.08);
+  --shadow-lift: 0 2px 4px rgb(15 23 42 / 0.05), 0 12px 32px -8px rgb(79 70 229 / 0.16);
+  --shadow-glass: inset 0 1px 0 0 rgb(255 255 255 / 0.08), 0 8px 32px -8px rgb(2 6 23 / 0.35);
+}
+
+/* ---------------------------------------------------------------------
+   Semantic tokens.
+
+   These are the *only* colours components should reach for. Each token is
+   redefined in `.dark`, so a component written once themes both ways with no
+   `dark:` variants scattered through the markup.
+
+   `inline` makes Tailwind emit the var() reference rather than copying the
+   resolved value, which is what lets one class follow the active theme.
+   --------------------------------------------------------------------- */
+@theme inline {
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-raised: var(--raised);
+  --color-sunken: var(--sunken);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-ink-subtle: var(--ink-subtle);
+  --color-ink-inverse: var(--ink-inverse);
+}
+
+:root {
+  --surface: #ffffff;
+  --surface-muted: #f8fafc;
+  --raised: #ffffff;
+  --sunken: #eef1f7;
+  --line: #e5e9f2;
+  --line-strong: #cdd4e4;
+  --ink: #101322;
+  --ink-muted: #454d63;
+  --ink-subtle: #64708a;
+  --ink-inverse: #ffffff;
+
+  /* Gradients / glass */
+  --hero-from: #4f46e5;
+  --hero-via: #6d28d9;
+  --hero-to: #0d9488;
+  --header-bg: rgb(255 255 255 / 0.78);
+
+  color-scheme: light;
+}
+
+.dark {
+  --surface: #151a2e;
+  --surface-muted: #1a2038;
+  --raised: #1b2138;
+  --sunken: #0b0f1f;
+  --line: #2a3151;
+  --line-strong: #3d4568;
+  --ink: #eef1fb;
+  --ink-muted: #c0c7dd;
+  --ink-subtle: #8d97b5;
+  --ink-inverse: #0b0f1f;
+
+  --hero-from: #4f46e5;
+  --hero-via: #6d28d9;
+  --hero-to: #0f766e;
+  --header-bg: rgb(15 19 38 / 0.72);
+
+  color-scheme: dark;
 }
 
 /* -------------------------------------------------------------- base */
@@ -26,7 +125,7 @@
   }
 
   body {
-    @apply bg-slate-100 text-slate-900 antialiased;
+    @apply bg-sunken text-ink font-sans antialiased;
     /* Nothing in this app should ever scroll sideways. */
     overflow-x: hidden;
   }
@@ -51,19 +150,23 @@
       font-size: 16px;
     }
   }
+
+  ::selection {
+    background-color: color-mix(in srgb, var(--color-brand-500) 25%, transparent);
+  }
 }
 
 /* -------------------------------------------------------- components */
 @layer components {
   .field-label {
-    @apply mb-1.5 block text-sm font-medium text-slate-700;
+    @apply mb-1.5 block text-sm font-medium text-ink;
   }
 
   .field-input {
-    @apply min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-base
-      text-slate-900 shadow-xs transition placeholder:text-slate-400
-      focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 focus:outline-none
-      disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500;
+    @apply min-h-11 w-full rounded-xl border border-line-strong bg-surface px-3.5 py-2.5 text-base
+      text-ink shadow-xs transition placeholder:text-ink-subtle
+      focus:border-brand-500 focus:ring-2 focus:ring-brand-500/25 focus:outline-none
+      disabled:cursor-not-allowed disabled:bg-sunken disabled:text-ink-subtle;
   }
 
   .field-input-error {
@@ -71,66 +174,124 @@
   }
 
   .field-hint {
-    @apply mt-1 text-xs text-slate-500;
+    @apply mt-1 text-xs text-ink-muted;
   }
 
   .field-error {
-    @apply mt-1 text-xs font-medium text-red-600;
+    @apply mt-1 text-xs font-medium text-red-600 dark:text-red-400;
   }
 
+  /* Rounded-2xl card with the soft layered shadow. */
   .card {
-    @apply rounded-2xl border border-slate-200 bg-white shadow-sm;
+    @apply rounded-2xl border border-line bg-raised shadow-soft;
+  }
+
+  .card-hover {
+    @apply transition duration-200 hover:-translate-y-0.5 hover:shadow-lift active:translate-y-0;
+  }
+
+  /* Hero / gradient surfaces */
+  .gradient-brand {
+    background-image: linear-gradient(135deg, var(--hero-from) 0%, var(--hero-via) 55%, var(--hero-to) 130%);
+  }
+
+  .glass-header {
+    background-color: var(--header-bg);
+    @apply backdrop-blur-xl;
+    box-shadow: var(--shadow-glass);
   }
 
   .btn,
   .btn-primary,
   .btn-secondary,
   .btn-danger,
-  .btn-ghost {
+  .btn-ghost,
+  .btn-accent {
     @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold
       transition active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50;
   }
 
   .btn-primary {
-    @apply bg-brand-600 text-white shadow-sm hover:bg-brand-700;
+    @apply bg-brand-600 text-white shadow-sm hover:bg-brand-700 dark:bg-brand-500 dark:hover:bg-brand-400
+      dark:text-white;
+  }
+
+  /* Gradient call-to-action for the primary actions that matter most. */
+  .btn-gradient {
+    @apply relative inline-flex min-h-11 items-center justify-center gap-2 overflow-hidden rounded-xl
+      px-4 text-sm font-semibold text-white shadow-sm transition active:scale-[0.98]
+      disabled:pointer-events-none disabled:opacity-50;
+    background-image: linear-gradient(135deg, var(--color-brand-600), var(--color-violet-brand) 70%);
+  }
+  .btn-gradient:hover {
+    box-shadow: 0 6px 20px -6px color-mix(in srgb, var(--color-brand-600) 60%, transparent);
+  }
+
+  .btn-accent {
+    @apply bg-accent-600 text-white shadow-sm hover:bg-accent-700;
   }
 
   .btn-secondary {
-    @apply border border-slate-300 bg-white text-slate-700 hover:bg-slate-50;
+    @apply border border-line-strong bg-surface text-ink hover:bg-surface-muted;
   }
 
   .btn-danger {
-    @apply bg-red-600 text-white hover:bg-red-700;
+    @apply bg-red-600 text-white hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-400;
   }
 
   .btn-ghost {
-    @apply text-slate-600 hover:bg-slate-100;
+    @apply text-ink-muted hover:bg-sunken;
   }
 
   .chip {
     @apply inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-sm
       font-medium whitespace-nowrap transition;
   }
+
+  .section-title {
+    @apply text-sm font-semibold tracking-tight text-ink;
+  }
 }
 
-/* --------------------------------------------------- rent status rows */
+/* --------------------------------------------------- rent status rows
+   Light mode uses the usual tint/accent pairs. Dark mode flips to dark
+   surfaces with lighter accents: a pale red-50 row behind dark text does not
+   survive the theme flip, and the accents are picked to keep AA contrast. */
 @layer utilities {
   .rent-overdue {
-    --rent-accent: var(--color-red-500);
-    --rent-surface: var(--color-red-50);
-    --rent-border: var(--color-red-200);
+    --rent-accent: #dc2626;
+    --rent-surface: #fef2f2;
+    --rent-border: #fecaca;
   }
 
   .rent-soon {
-    --rent-accent: var(--color-amber-500);
-    --rent-surface: var(--color-amber-50);
-    --rent-border: var(--color-amber-200);
+    --rent-accent: #b45309;
+    --rent-surface: #fffbeb;
+    --rent-border: #fde68a;
   }
 
   .rent-ok {
-    --rent-accent: var(--color-emerald-500);
-    --rent-surface: var(--color-emerald-50);
-    --rent-border: var(--color-emerald-200);
+    --rent-accent: #047857;
+    --rent-surface: #ecfdf5;
+    --rent-border: #a7f3d0;
+  }
+
+  .dark .rent-overdue {
+    --rent-accent: #fca5a5;
+    --rent-surface: rgb(69 10 10 / 0.45);   /* red-950/40 */
+    --rent-border: #7f1d1d;
+  }
+
+  .dark .rent-soon {
+    --rent-accent: #fcd34d;
+    --rent-surface: rgb(69 26 3 / 0.45);
+    --rent-border: #78350f;
+  }
+
+  .dark .rent-ok {
+    --rent-accent: #6ee7b7;
+    --rent-surface: rgb(2 44 34 / 0.45);
+    --rent-border: #065f46;
   }
 
   .rent-row {
@@ -141,25 +302,39 @@
   .rent-stripe {
     background-color: var(--rent-accent);
   }
+
+  /* Rent accent as *text* - AA-checked against both tint pairs. */
+  .rent-text {
+    color: var(--rent-accent);
+  }
+
+  .scroll-slim {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+
+  .scroll-slim::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scroll-slim::-webkit-scrollbar-thumb {
+    background-color: var(--line-strong);
+    border-radius: 9999px;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
 }
 
-/* Scrollbars inside the T&C box and long lists */
-.scroll-slim {
-  scrollbar-width: thin;
-  scrollbar-color: var(--color-slate-300) transparent;
-}
-
-.scroll-slim::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-.scroll-slim::-webkit-scrollbar-thumb {
-  background-color: var(--color-slate-300);
-  border-radius: 9999px;
-}
-
-/* Respect users who ask for less motion */
+/* Respect users who ask for less motion. framer-motion also reads the same
+   media query via useReducedMotion, so animations degrade there too. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -183,4 +358,30 @@
 
 .animate-toast-in {
   animation: toast-in 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Skeleton shimmer */
+@keyframes shimmer {
+  0% {
+    background-position: -400px 0;
+  }
+  100% {
+    background-position: 400px 0;
+  }
+}
+
+.skeleton {
+  @apply animate-pulse rounded-lg bg-line;
+}
+
+/* Confetti pieces (payment success). Driven from JS by inline style. */
+@keyframes confetti-fall {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, -10vh, 0) rotate(0deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--cx, 0), 85vh, 0) rotate(var(--cr, 540deg));
+  }
 }

@@ -9,13 +9,23 @@
     "preview": "vite preview --port 4173",
     "lint": "oxlint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:install": "playwright install chromium",
+    "schema:build": "node scripts/build-schema.mjs",
+    "schema:audit": "node scripts/audit-sql.mjs",
+    "verify": "npm run lint && npm run build && npm test && npm run schema:audit"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.1",
     "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.117.2",
     "dayjs": "^1.11.23",
+    "framer-motion": "^13.5.0",
+    "jspdf": "^4.2.1",
+    "lucide-react": "^1.49.0",
+    "papaparse": "^5.7.0",
+    "qrcode": "^1.5.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-hook-form": "^7.89.0",
@@ -24,6 +34,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",

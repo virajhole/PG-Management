@@ -11,7 +11,7 @@ export function Spinner({ className = 'size-5' }) {
 
 export function LoadingBlock({ label = 'Loading…' }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 py-16 text-slate-500">
+    <div className="flex flex-col items-center justify-center gap-3 py-16 text-ink-subtle">
       <Spinner className="size-7 text-brand-600" />
       <p className="text-sm font-medium">{label}</p>
     </div>
@@ -20,13 +20,13 @@ export function LoadingBlock({ label = 'Loading…' }) {
 
 export function SkeletonRow() {
   return (
-    <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4">
-      <div className="size-11 shrink-0 animate-pulse rounded-full bg-slate-200" />
+    <div className="flex items-center gap-3 rounded-2xl border border-line bg-raised p-4">
+      <div className="size-11 shrink-0 animate-pulse rounded-full bg-line-strong" />
       <div className="flex-1 space-y-2">
-        <div className="h-3.5 w-1/3 animate-pulse rounded bg-slate-200" />
-        <div className="h-3 w-1/2 animate-pulse rounded bg-slate-100" />
+        <div className="h-3.5 w-1/3 animate-pulse rounded bg-line-strong" />
+        <div className="h-3 w-1/2 animate-pulse rounded bg-sunken" />
       </div>
-      <div className="h-8 w-20 animate-pulse rounded-lg bg-slate-100" />
+      <div className="h-8 w-20 animate-pulse rounded-lg bg-sunken" />
     </div>
   );
 }
@@ -43,21 +43,21 @@ export function SkeletonList({ count = 5 }) {
 
 export function EmptyState({ icon: Icon, title, message, action, tone = 'slate' }) {
   const tones = {
-    slate: 'bg-slate-100 text-slate-500',
+    slate: 'bg-sunken text-ink-subtle',
     brand: 'bg-brand-50 text-brand-600',
     amber: 'bg-amber-50 text-amber-600',
   };
 
   return (
-    <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-slate-300 bg-white/60 px-6 py-14 text-center">
+    <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-line-strong bg-raised/60 px-6 py-14 text-center">
       {Icon && (
         <div className={`flex size-14 items-center justify-center rounded-full ${tones[tone]}`}>
           <Icon className="size-7" />
         </div>
       )}
       <div>
-        <h3 className="text-base font-semibold text-slate-800">{title}</h3>
-        {message && <p className="mx-auto mt-1 max-w-sm text-sm leading-relaxed text-slate-500">{message}</p>}
+        <h3 className="text-base font-semibold text-ink">{title}</h3>
+        {message && <p className="mx-auto mt-1 max-w-sm text-sm leading-relaxed text-ink-subtle">{message}</p>}
       </div>
       {action}
     </div>

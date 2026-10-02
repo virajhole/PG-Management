@@ -1,13 +1,29 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { TextField, Textarea } from '../components/FormFields.jsx';
 import { AmountField } from '../components/AmountField.jsx';
 import { ConfirmDialog } from '../components/Modal.jsx';
-import { SettingsIcon, RupeeIcon, LockIcon, IdCardIcon, DownloadIcon } from '../components/icons.jsx';
+import {
+  SettingsIcon,
+  RupeeIcon,
+  LockIcon,
+  IdCardIcon,
+  DownloadIcon,
+  SunIcon,
+  MoonIcon,  MonitorIcon,
+  WalletIcon,
+  UtensilsCrossedIcon,
+  ShieldCheckIcon,
+  ClockIcon,
+  UserPlusIcon,
+} from '../components/icons.jsx';
 import { useData } from '../context/DataContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
+import { useTheme } from '../context/ThemeContext.jsx';
+import { listAdmins, addAdmin, removeAdmin } from '../services/supabase.js';
 import { seedService, settingsService, backupService, migrationService } from '../services/index.js';
-import { formatCurrency } from '../utils/format.js';
+import { formatCurrency, formatDate } from '../utils/format.js';
+import { dayjs } from '../utils/dateLogic.js';
 import { SHARING_TYPES, DEFAULT_TERMS } from '../services/index.js';
 import { Spinner } from '../components/States.jsx';
 import { useInstallPrompt } from '../hooks/useInstallPrompt.js';
@@ -21,6 +37,13 @@ function settingsSignature(settings) {
     settings.sharingPrices,
     settings.defaultDeposit,
     settings.terms,
+    settings.upiId,
+    settings.lateFeeMode,
+    settings.lateFeeValue,
+    settings.lateFeeGraceDays,
+    settings.lateFeeMax,
+    settings.messEnabled,
+    settings.messCharges,
   ]);
 }
 
@@ -29,17 +52,233 @@ function Card({ title, description, icon: Icon, children }) {
     <section className="card p-4 sm:p-5">
       <div className="mb-4 flex items-start gap-3">
         {Icon && (
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600 dark:bg-brand-950 dark:text-brand-300">
             <Icon className="size-4.5" />
           </div>
         )}
         <div className="min-w-0">
-          <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
-          {description && <p className="mt-0.5 text-xs leading-relaxed text-slate-500">{description}</p>}
+          <h2 className="text-sm font-semibold text-ink">{title}</h2>
+          {description && <p className="mt-0.5 text-xs leading-relaxed text-ink-muted">{description}</p>}
         </div>
       </div>
       {children}
     </section>
+  );
+}
+
+const THEME_OPTIONS = [
+  { value: 'light', label: 'Light', icon: SunIcon },
+  { value: 'dark', label: 'Dark', icon: MoonIcon },
+  { value: 'system', label: 'System', icon: MonitorIcon },
+];
+
+function AppearanceCard() {
+  const { theme, resolvedTheme, setTheme } = useTheme();
+
+  return (
+    <Card
+      title="Appearance"
+      description="Applies immediately and is remembered on this device. System follows your phone or computer's light or dark setting."
+      icon={resolvedTheme === 'dark' ? MoonIcon : SunIcon}
+    >
+      <div role="radiogroup" aria-label="Theme" className="grid grid-cols-3 gap-2">
+        {THEME_OPTIONS.map((option) => {
+          const Icon = option.icon;
+          const selected = theme === option.value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              onClick={() => setTheme(option.value)}
+              className={`flex min-h-20 flex-col items-center justify-center gap-2 rounded-xl border px-2 py-3 text-sm font-medium transition ${
+                selected
+                  ? 'border-brand-500 bg-brand-50 text-brand-700 ring-2 ring-brand-500/20 dark:bg-brand-950 dark:text-brand-200'
+                  : 'border-line-strong bg-surface text-ink-muted hover:bg-sunken'
+              }`}
+            >
+              <Icon className="size-5" />
+              <span>{option.label}</span>
+            </button>
+          );
+        })}
+      </div>
+      <p className="field-hint">
+        Currently showing the {resolvedTheme} theme.
+        {theme === 'system' ? ' Following your device setting.' : ''}
+      </p>
+    </Card>
+  );
+}
+
+/**
+ * Settings -> Team: the allowlist.
+ *
+ * `admins` is the only gate between a signed-in account and the ledger (see
+ * is_admin() in schema.sql). Anyone whose address is not here can sign in
+ * successfully and will still be shown "Access denied, contact the owner".
+ * Staff accounts can read and record, admins can also manage the team, so the
+ * owner is never locked out of their own PG by a mistake here.
+ */
+function TeamCard({ currentEmail }) {
+  const toast = useToast();
+  const [members, setMembers] = useState([]);
+  const [status, setStatus] = useState('loading'); // loading | ready | error
+  const [error, setError] = useState(null);
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState('admin');
+  const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState(null);
+
+  const load = useCallback(async () => {
+    setStatus('loading');
+    try {
+      const list = await listAdmins();
+      setMembers(Array.isArray(list) ? list : []);
+      setError(null);
+      setStatus('ready');
+    } catch (err) {
+      setError(err);
+      setStatus('error');
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const clean = email.trim().toLowerCase();
+  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean);
+  const already = members.some((m) => m.email === clean);
+
+  async function add(event) {
+    event.preventDefault();
+    if (!valid || already || busy) return;
+    setBusy(true);
+    try {
+      await addAdmin({ email: clean, role });
+      setEmail('');
+      await load();
+      toast.success(`${clean} can now sign in.`);
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    if (!removing || busy) return;
+    setBusy(true);
+    try {
+      await removeAdmin(removing.email);
+      setRemoving(null);
+      await load();
+      toast.success(`${removing.email} removed.`);
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card
+      title="Team"
+      description="Only these email addresses can open the ledger. Everyone else can sign in with Google but is shown an access-denied screen and signed straight back out."
+      icon={ShieldCheckIcon}
+    >
+      {status === 'loading' ? (
+        <p className="flex items-center gap-2 py-4 text-sm text-ink-subtle">
+          <Spinner className="size-4" /> Loading the team list…
+        </p>
+      ) : status === 'error' ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3">
+          <p className="text-sm font-medium text-amber-900">The admins table is not available.</p>
+          <p className="mt-1 text-xs leading-relaxed text-amber-800">
+            {error?.message || 'Run supabase/schema.sql in the Supabase SQL editor to create it.'}
+          </p>
+          <button type="button" className="btn-secondary mt-3" onClick={load}>
+            Try again
+          </button>
+        </div>
+      ) : (
+        <>
+          <ul className="divide-y divide-line">
+            {members.map((member) => (
+              <li key={member.email} className="flex items-center gap-3 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-ink">{member.email}</p>
+                  <p className="text-xs text-ink-subtle">
+                    {member.role === 'staff' ? 'Staff · record payments' : 'Admin · full access'}
+                    {member.email === String(currentEmail ?? '').toLowerCase() && ' · you'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn-ghost px-2 text-xs text-red-600 hover:bg-red-50"
+                  onClick={() => setRemoving(member)}
+                  disabled={member.email === String(currentEmail ?? '').toLowerCase()}
+                  title={
+                    member.email === String(currentEmail ?? '').toLowerCase()
+                      ? 'You cannot remove yourself'
+                      : 'Remove from the team'
+                  }
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+
+          <form onSubmit={add} className="mt-4 flex flex-wrap items-end gap-2">
+            <div className="min-w-48 flex-1">
+              <label htmlFor="team-email" className="mb-1 block text-xs font-semibold text-ink">
+                Add by email
+              </label>
+              <input
+                id="team-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="name@gmail.com"
+                className={`field-input ${email && !valid ? 'field-input-error' : ''}`}
+              />
+            </div>
+            <select
+              aria-label="Role"
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+              className="field-input w-32"
+            >
+              <option value="admin">Admin</option>
+              <option value="staff">Staff</option>
+            </select>
+            <button type="submit" className="btn-primary" disabled={!valid || already || busy}>
+              <UserPlusIcon className="size-4" />
+              Add
+            </button>
+          </form>
+          {email && !valid && <p className="field-error mt-1">Enter a valid email address.</p>}
+          {already && <p className="field-hint mt-1">That address is already on the team.</p>}
+          <p className="field-hint mt-2">
+            Admins can manage the team. Staff can use the app but cannot change who has access.
+          </p>
+        </>
+      )}
+
+      <ConfirmDialog
+        open={Boolean(removing)}
+        onClose={() => setRemoving(null)}
+        onConfirm={remove}
+        busy={busy}
+        title="Remove from the team?"
+        confirmLabel="Remove"
+        tone="danger"
+        message={`${removing?.email ?? ''} will be signed out the next time they load the app and will see an access-denied screen.`}
+      />
+    </Card>
   );
 }
 
@@ -54,6 +293,13 @@ export default function Settings() {
   const [pgName, setPgName] = useState(settings.pgName);
   const [ownerName, setOwnerName] = useState(settings.ownerName);
   const [ownerMobile, setOwnerMobile] = useState(settings.ownerMobile);
+  const [upiId, setUpiId] = useState(settings.upiId);
+  const [lateFeeMode, setLateFeeMode] = useState(settings.lateFeeMode);
+  const [lateFeeValue, setLateFeeValue] = useState(settings.lateFeeValue ?? 0);
+  const [lateFeeGraceDays, setLateFeeGraceDays] = useState(settings.lateFeeGraceDays ?? 0);
+  const [lateFeeMax, setLateFeeMax] = useState(settings.lateFeeMax ?? '');
+  const [messEnabled, setMessEnabled] = useState(settings.messEnabled);
+  const [messCharges, setMessCharges] = useState(settings.messCharges ?? 0);
   const [savingSection, setSavingSection] = useState(null);
 
   const [confirmReset, setConfirmReset] = useState(false);
@@ -61,6 +307,7 @@ export default function Settings() {
   const [confirmWipe, setConfirmWipe] = useState(false);
   const [confirmImportLocal, setConfirmImportLocal] = useState(false);
   const fileRef = useRef(null);
+  const [lastBackupAt, setLastBackupAt] = useState(() => localStorage.getItem('pgm.lastBackupAt') || '');
   const { canInstall, isIos, installed, promptInstall } = useInstallPrompt();
 
   // Settings arrive asynchronously from Supabase, so a re-render can land while
@@ -78,6 +325,13 @@ export default function Settings() {
     setPrices({ ...settings.sharingPrices });
     setDeposit(settings.defaultDeposit);
     setTerms(settings.terms);
+    setUpiId(settings.upiId);
+    setLateFeeMode(settings.lateFeeMode);
+    setLateFeeValue(settings.lateFeeValue ?? 0);
+    setLateFeeGraceDays(settings.lateFeeGraceDays ?? 0);
+    setLateFeeMax(settings.lateFeeMax ?? '');
+    setMessEnabled(settings.messEnabled);
+    setMessCharges(settings.messCharges ?? 0);
   }, [signature, settings]);
 
   const totalMonthly = SHARING_TYPES.reduce((sum, n) => sum + (Number(prices[n]) || 0), 0);
@@ -121,6 +375,62 @@ export default function Settings() {
       toast.success('Settings saved.');
     } catch (error) {
       toast.error(error.message || 'Could not save the settings.');
+    } finally {
+      setSavingSection(null);
+    }
+  }
+
+  async function savePayments() {
+    const vpa = upiId.trim();
+    if (vpa && !(vpa.includes('@') && vpa.length <= 60)) {
+      toast.error('Enter a valid UPI ID like yourname@bank.');
+      return;
+    }
+    setSavingSection('payments');
+    try {
+      await updateSettings({ ...settings, upiId: vpa });
+      toast.success('UPI ID saved. Receipts and reminders can now show a QR code.');
+    } catch (error) {
+      toast.error(error.message || 'Could not save the UPI ID.');
+    } finally {
+      setSavingSection(null);
+    }
+  }
+
+  async function saveLateFee() {
+    const value = Number(lateFeeValue) || 0;
+    if (lateFeeMode !== 'none' && value <= 0) {
+      toast.error('Enter a late fee amount greater than zero.');
+      return;
+    }
+    setSavingSection('latefee');
+    try {
+      await updateSettings({
+        ...settings,
+        lateFeeMode,
+        lateFeeValue: lateFeeMode === 'none' ? 0 : value,
+        lateFeeGraceDays: Math.max(Number(lateFeeGraceDays) || 0, 0),
+        lateFeeMax: lateFeeMax === '' || Number(lateFeeMax) <= 0 ? null : Number(lateFeeMax),
+      });
+      toast.success('Late fee settings saved.');
+    } catch (error) {
+      toast.error(error.message || 'Could not save the late fee settings.');
+    } finally {
+      setSavingSection(null);
+    }
+  }
+
+  async function saveMess() {
+    setSavingSection('mess');
+    try {
+      await updateSettings({
+        ...settings,
+        messEnabled,
+        messCharges: Math.max(Number(messCharges) || 0, 0),
+      });
+      toast.success('Mess settings saved.');
+    } catch (error) {
+      toast.error(error.message || 'Could not save the mess settings.');
     } finally {
       setSavingSection(null);
     }
@@ -186,6 +496,9 @@ export default function Settings() {
         );
       }
       toast.success('Backup downloaded.');
+      const backupStamp = new Date().toISOString();
+      localStorage.setItem('pgm.lastBackupAt', backupStamp);
+      setLastBackupAt(backupStamp);
     } catch (error) {
       toast.error(error.message || 'Could not build the backup.');
     } finally {
@@ -243,9 +556,17 @@ export default function Settings() {
   return (
     <div className="mx-auto max-w-3xl space-y-4 pb-4">
       <header>
-        <h1 className="text-xl font-bold text-slate-900 sm:text-2xl">Settings</h1>
-        <p className="mt-0.5 text-sm text-slate-500">Pricing, deposit defaults, house rules and app security.</p>
+        <h1 className="text-xl font-bold text-ink sm:text-2xl">Settings</h1>
+        <p className="mt-0.5 text-sm text-ink-muted">
+          Appearance, pricing, deposit defaults, house rules and app security.
+        </p>
       </header>
+
+      {/* --------------------------------------------------- appearance */}
+      <AppearanceCard />
+
+      {/* ---------------------------------------------------------- team */}
+      <TeamCard currentEmail={user?.email} />
 
       {/* ------------------------------------------------------- prices */}
       <Card
@@ -268,9 +589,9 @@ export default function Settings() {
         </div>
 
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-ink-subtle">
             If every bed of every room were occupied, monthly income would be{' '}
-            <span className="font-semibold text-slate-700">{formatCurrency(totalMonthly)}</span>.
+            <span className="font-semibold text-ink">{formatCurrency(totalMonthly)}</span>.
           </p>
           <button type="button" className="btn-primary" onClick={savePricing} disabled={savingSection === 'pricing'}>
             {savingSection === 'pricing' ? 'Saving…' : 'Save prices'}
@@ -348,6 +669,124 @@ export default function Settings() {
         </div>
       </Card>
 
+      {/* ------------------------------------------------------ payments */}
+      <Card
+        title="Payments (UPI)"
+        description="Your UPI ID is turned into a scannable QR code on receipts and WhatsApp reminders, pre-filled with the exact remaining amount."
+        icon={WalletIcon}
+      >
+        <div className="space-y-4">
+          <TextField
+            id="upiId"
+            label="UPI ID"
+            placeholder="yourname@bank"
+            value={upiId}
+            maxLength={60}
+            hint="Leave empty to hide QR codes."
+            onChange={(e) => setUpiId(e.target.value.trim())}
+          />
+          <div className="flex justify-end">
+            <button type="button" className="btn-primary" onClick={savePayments} disabled={savingSection === 'payments'}>
+              {savingSection === 'payments' ? 'Saving…' : 'Save UPI ID'}
+            </button>
+          </div>
+        </div>
+      </Card>
+
+      {/* ------------------------------------------------------ late fee */}
+      <Card
+        title="Late fee"
+        description="Suggested automatically once a tenant is past the grace period. You review and confirm every fee before it is recorded, and any fee can be waived."
+        icon={ClockIcon}
+      >
+        <div className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="field-label" htmlFor="lateFeeMode">Charge mode</label>
+              <select
+                id="lateFeeMode"
+                className="field-input"
+                value={lateFeeMode}
+                onChange={(e) => setLateFeeMode(e.target.value)}
+              >
+                <option value="none">No late fee</option>
+                <option value="fixed">Fixed rupees per day</option>
+                <option value="percent">Percent of balance per day</option>
+              </select>
+            </div>
+            <AmountField
+              id="lateFeeValue"
+              label={lateFeeMode === 'percent' ? 'Percent per day' : 'Rupees per day'}
+              min="0"
+              step={lateFeeMode === 'percent' ? '0.1' : '1'}
+              value={lateFeeValue}
+              disabled={lateFeeMode === 'none'}
+              onChange={(e) => setLateFeeValue(e.target.value)}
+            />
+            <AmountField
+              id="lateFeeGraceDays"
+              label="Grace period (days)"
+              min="0"
+              step="1"
+              hint="Days after the due date before the fee starts."
+              value={lateFeeGraceDays}
+              disabled={lateFeeMode === 'none'}
+              onChange={(e) => setLateFeeGraceDays(e.target.value)}
+            />
+            <AmountField
+              id="lateFeeMax"
+              label="Maximum fee (optional)"
+              min="0"
+              step="1"
+              hint="Leave empty for no cap."
+              value={lateFeeMax}
+              disabled={lateFeeMode === 'none'}
+              onChange={(e) => setLateFeeMax(e.target.value)}
+            />
+          </div>
+          <div className="flex justify-end">
+            <button type="button" className="btn-primary" onClick={saveLateFee} disabled={savingSection === 'latefee'}>
+              {savingSection === 'latefee' ? 'Saving…' : 'Save late fee settings'}
+            </button>
+          </div>
+        </div>
+      </Card>
+
+      {/* --------------------------------------------------------- mess */}
+      <Card
+        title="Mess / food"
+        description="Enable if the PG charges a monthly mess fee. The menu itself is edited on the Mess page."
+        icon={UtensilsCrossedIcon}
+      >
+        <div className="space-y-4">
+          <label className="flex min-h-11 items-center gap-3 text-sm font-medium text-ink">
+            <input
+              type="checkbox"
+              className="size-4.5 accent-brand-600"
+              checked={messEnabled}
+              onChange={(e) => setMessEnabled(e.target.checked)}
+            />
+            Offer the mess (show the weekly menu and charges)
+          </label>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <AmountField
+              id="messCharges"
+              label="Monthly mess charges"
+              min="0"
+              step="1"
+              value={messCharges}
+              disabled={!messEnabled}
+              onChange={(e) => setMessCharges(e.target.value)}
+            />
+          </div>
+          <div className="flex justify-end">
+            <button type="button" className="btn-primary" onClick={saveMess} disabled={savingSection === 'mess'}>
+              {savingSection === 'mess' ? 'Saving…' : 'Save mess settings'}
+            </button>
+          </div>
+        </div>
+      </Card>
+
       {/* ------------------------------------------------------ account */}
       <Card
         title="Your account"
@@ -355,19 +794,57 @@ export default function Settings() {
         icon={LockIcon}
       >
         <div className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-50 px-3.5 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-sunken px-3.5 py-3">
             <div className="min-w-0">
-              <p className="truncate text-sm font-semibold text-slate-800">{user?.email || 'Signed in'}</p>
-              <p className="text-xs text-slate-500">{customers.length} tenant records in this account</p>
+              <p className="truncate text-sm font-semibold text-ink">{user?.email || 'Signed in'}</p>
+              <p className="text-xs text-ink-subtle">{customers.length} tenant records in this account</p>
             </div>
             <button type="button" className="btn-secondary" onClick={logout}>
               Sign out
             </button>
           </div>
-          <p className="text-xs leading-relaxed text-slate-500">
+          <p className="text-xs leading-relaxed text-ink-subtle">
             ID documents sit in a private storage bucket and are only ever read through short-lived signed URLs.
           </p>
         </div>
+      </Card>
+
+      {/* ------------------------------------------------------- privacy */}
+      <Card
+        title="Data privacy"
+        description="Who can see what, and how tenants' documents are protected."
+        icon={ShieldCheckIcon}
+      >
+        <ul className="space-y-2.5 text-xs leading-relaxed text-ink-muted">
+          <li className="flex gap-2.5">
+            <ShieldCheckIcon className="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            <span>
+              <span className="font-semibold text-ink">Only this account</span> can open tenant records, payments and ID
+              proofs. Every table enforces Row Level Security, so the database itself refuses other readers.
+            </span>
+          </li>
+          <li className="flex gap-2.5">
+            <LockIcon className="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            <span>
+              <span className="font-semibold text-ink">ID proofs</span> live in a private storage bucket and are served
+              only through short-lived signed URLs that expire quickly - never public links, never indexed.
+            </span>
+          </li>
+          <li className="flex gap-2.5">
+            <DownloadIcon className="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            <span>
+              <span className="font-semibold text-ink">Backups</span> you download are plain files on your device - keep
+              them somewhere safe, because they contain the same private data.
+            </span>
+          </li>
+          <li className="flex gap-2.5">
+            <ClockIcon className="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            <span>
+              <span className="font-semibold text-ink">Deleting a tenant</span> removes their record, document links and
+              images; the recycle bin keeps deleted rows for 30 days and then purges them.
+            </span>
+          </li>
+        </ul>
       </Card>
 
       {/* ---------------------------------------------------- backup / data */}
@@ -377,6 +854,18 @@ export default function Settings() {
         icon={IdCardIcon}
       >
         <div className="space-y-3">
+          <p className="rounded-xl bg-sunken px-3.5 py-2.5 text-xs text-ink-muted">
+            {lastBackupAt ? (
+              <>
+                Last backup downloaded:{' '}
+                <span className="font-semibold text-ink">
+                  {formatDate(lastBackupAt)} at {dayjs(lastBackupAt).format('HH:mm')}
+                </span>
+              </>
+            ) : (
+              'No backup downloaded from this device yet.'
+            )}
+          </p>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -433,7 +922,7 @@ export default function Settings() {
             </div>
           )}
 
-          <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+          <div className="flex flex-wrap gap-2 border-t border-line pt-3">
             <button type="button" className="btn-secondary" onClick={() => setConfirmSeed(true)} disabled={savingSection === 'seed'}>
               {savingSection === 'seed' ? <Spinner className="size-4" /> : null}
               Add sample tenants
@@ -470,22 +959,22 @@ export default function Settings() {
             >
               Install app
             </button>
-            <span className="text-xs text-slate-500">Adds a home screen icon and works offline.</span>
+            <span className="text-xs text-ink-subtle">Adds a home screen icon and works offline.</span>
           </div>
         ) : isIos ? (
-          <p className="text-sm text-slate-600">
+          <p className="text-sm text-ink-muted">
             On iPhone, tap <span className="font-semibold">Share</span> and then{' '}
             <span className="font-semibold">Add to Home Screen</span>.
           </p>
         ) : (
-          <p className="text-sm text-slate-600">
+          <p className="text-sm text-ink-muted">
             Use your browser menu and choose <span className="font-semibold">Install app</span> or{' '}
             <span className="font-semibold">Add to Home screen</span>.
           </p>
         )}
       </Card>
 
-      <p className="pt-2 text-center text-xs text-slate-400">
+      <p className="pt-2 text-center text-xs text-ink-subtle">
         PG Manager · v2.0 · data stored in your own Supabase account
       </p>
 

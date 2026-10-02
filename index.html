@@ -10,7 +10,7 @@
     />
 
     <link rel="manifest" href="/manifest.webmanifest" />
-    <meta name="theme-color" content="#1f3cf4" />
+    <meta name="theme-color" content="#eef1f7" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -21,13 +21,43 @@
     <meta name="apple-mobile-web-app-title" content="PG Manager" />
     <meta name="mobile-web-app-capable" content="yes" />
 
+    <script>
+      // Applied before first paint on purpose: doing this in a React effect
+      // would paint the light theme first and then flip, which reads as a flash.
+      // Kept in sync with src/context/ThemeContext.jsx.
+      (function () {
+        try {
+          var stored = localStorage.getItem('pg-manager:theme');
+          var theme = stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system';
+          var dark =
+            theme === 'dark' ||
+            (theme === 'system' &&
+              window.matchMedia &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches);
+
+          document.documentElement.classList.toggle('dark', dark);
+          document
+            .querySelector('meta[name="theme-color"]')
+            .setAttribute('content', dark ? '#0b0f1f' : '#eef1f7');
+        } catch (e) {
+          /* Storage blocked: leave the light default in place. */
+        }
+      })();
+    </script>
+
     <style>
-      /* First-paint background so there is no white flash on launch. */
+      /* First-paint background so there is no white flash on launch.
+         Mirrors --sunken in src/index.css. */
       html,
       body,
       #root {
         min-height: 100%;
-        background-color: #f1f5f9;
+        background-color: #eef1f7;
+      }
+      html.dark,
+      html.dark body,
+      html.dark #root {
+        background-color: #0b0f1f;
       }
     </style>
   </head>

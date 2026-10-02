@@ -3,6 +3,8 @@ import * as customerService from '../services/customerService.js';
 import * as cycleService from '../services/cycleService.js';
 import * as lightBillService from '../services/lightBillService.js';
 import * as transactionService from '../services/transactionService.js';
+import * as agreementsService from '../services/agreementsService.js';
+import * as roomService from '../services/roomService.js';
 import { loadSettings, saveSettings, DEFAULT_SETTINGS } from '../services/settingsService.js';
 import { useOnlineStatus } from '../hooks/useOnlineStatus.js';
 import { useAuth } from './AuthContext.jsx';
@@ -24,12 +26,41 @@ export function DataProvider({ children }) {
   const [lightBills, setLightBills] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [settings, setSettings] = useState(() => ({ ...DEFAULT_SETTINGS }));
+  // Rooms live here too. Global search, the assets inventory and the operations
+  // sheets all read the room list from this context, so it has to be part of the
+  // same always-an-array guarantee as the ledger collections. `roomsStatus` is
+  // separate because rooms are optional (a fresh account has none, and the
+  // table may not even exist on an older backend) - a room load failure must
+  // never take the whole ledger down with it.
+  const [rooms, setRooms] = useState([]);
+  const [roomsStatus, setRoomsStatus] = useState('idle'); // idle | loading | ready | error
+  const [roomsError, setRoomsError] = useState(null);
   const [status, setStatus] = useState('loading'); // loading | ready | error
   const [error, setError] = useState(null);
   const [today, setToday] = useState(() => dayjs().startOf('day'));
   const online = useOnlineStatus();
   const { user, isAuthenticated } = useAuth();
   const userId = user?.id ?? null;
+
+  /**
+   * Reload rooms on their own. Failures land in `roomsError` instead of
+   * rejecting, so callers can render an inline notice and carry on.
+   */
+  const refreshRooms = useCallback(async () => {
+    setRoomsStatus('loading');
+    try {
+      const list = await roomService.listRooms();
+      setRooms(Array.isArray(list) ? list : []);
+      setRoomsError(null);
+      setRoomsStatus('ready');
+      return true;
+    } catch (err) {
+      setRooms([]);
+      setRoomsError(err);
+      setRoomsStatus('error');
+      return false;
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -39,10 +70,10 @@ export function DataProvider({ children }) {
         lightBillService.listLightBills(),
         transactionService.listTransactions(),
       ]);
-      setCustomers(customerList);
-      setCycles(cycleList);
-      setLightBills(billList);
-      setTransactions(txList);
+      setCustomers(Array.isArray(customerList) ? customerList : []);
+      setCycles(Array.isArray(cycleList) ? cycleList : []);
+      setLightBills(Array.isArray(billList) ? billList : []);
+      setTransactions(Array.isArray(txList) ? txList : []);
       setStatus('ready');
       setError(null);
     } catch (err) {
@@ -68,6 +99,9 @@ export function DataProvider({ children }) {
       setLightBills([]);
       setTransactions([]);
       setSettings({ ...DEFAULT_SETTINGS });
+      setRooms([]);
+      setRoomsError(null);
+      setRoomsStatus('idle');
       setError(null);
       setStatus('ready');
       return undefined;
@@ -75,6 +109,8 @@ export function DataProvider({ children }) {
 
     (async () => {
       setStatus('loading');
+      // Rooms are optional; never let their failure block the ledger load.
+      refreshRooms();
       try {
         // On-device data is *not* imported automatically: it is a one-way,
         // user-initiated action offered from Settings, so a stale browser copy
@@ -87,10 +123,13 @@ export function DataProvider({ children }) {
         ]);
         const loadedSettings = await loadSettings();
         if (cancelled) return;
-        setCustomers(customerList);
-        setCycles(cycleList);
-        setLightBills(billList);
-        setTransactions(txList);
+        // Defensive: every consumer treats these as arrays, so a service that
+        // ever hands back null (a partial response, a mocked backend) must not
+        // become a `.map of undefined` three screens later.
+        setCustomers(Array.isArray(customerList) ? customerList : []);
+        setCycles(Array.isArray(cycleList) ? cycleList : []);
+        setLightBills(Array.isArray(billList) ? billList : []);
+        setTransactions(Array.isArray(txList) ? txList : []);
         setSettings(loadedSettings);
         setStatus('ready');
       } catch (err) {
@@ -102,7 +141,7 @@ export function DataProvider({ children }) {
     return () => {
       cancelled = true;
     };
-  }, [isAuthenticated, userId]);
+  }, [isAuthenticated, userId, refreshRooms]);
 
   // Coming back online after a dropped connection: whatever was on screen is
   // stale, so pull the ledger again rather than showing numbers that moved
@@ -217,9 +256,16 @@ export function DataProvider({ children }) {
     return saved;
   }, []);
 
+  // Digital agreement: store the generated PDF + signature and refresh the
+  // customer list (the agreement row itself is read on the details page).
+  const createAgreement = useCallback(async ({ customer, blob, signatureDataUrl }) => {
+    const row = await agreementsService.createAgreement({ customer, blob, signatureDataUrl });
+    return row;
+  }, []);
+
   const resync = useCallback(async () => {
-    await refresh();
-  }, [refresh]);
+    await Promise.all([refresh(), refreshRooms()]);
+  }, [refresh, refreshRooms]);
 
   // ---------------------------------------------------------- derived views
   // Kept in the context so the dashboard, list and details pages all read the
@@ -255,6 +301,10 @@ export function DataProvider({ children }) {
       lightBills,
       transactions,
       settings,
+      rooms,
+      roomsStatus,
+      roomsError,
+      refreshRooms,
       status,
       error,
       online,
@@ -276,6 +326,7 @@ export function DataProvider({ children }) {
       deleteTransaction,
       setCustomerImage,
       updateSettings,
+      createAgreement,
     }),
     [
       customers,
@@ -283,6 +334,10 @@ export function DataProvider({ children }) {
       lightBills,
       transactions,
       settings,
+      rooms,
+      roomsStatus,
+      roomsError,
+      refreshRooms,
       status,
       error,
       online,
@@ -304,6 +359,7 @@ export function DataProvider({ children }) {
       deleteTransaction,
       setCustomerImage,
       updateSettings,
+      createAgreement,
     ],
   );
 

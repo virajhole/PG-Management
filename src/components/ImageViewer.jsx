@@ -62,7 +62,7 @@ export default function ImageViewer({ imageId, open, onClose, title = 'Document'
                 setZoom(1);
                 setOffset({ x: 0, y: 0 });
               }}
-              className="min-h-10 rounded-lg px-3 text-sm font-medium text-white/80 transition hover:bg-white/10"
+              className="min-h-10 rounded-lg px-3 text-sm font-medium text-white/80 transition hover:bg-raised/10"
             >
               Reset
             </button>
@@ -70,7 +70,7 @@ export default function ImageViewer({ imageId, open, onClose, title = 'Document'
           <button
             type="button"
             onClick={onClose}
-            className="flex size-10 items-center justify-center rounded-lg text-white/80 transition hover:bg-white/10"
+            className="flex size-10 items-center justify-center rounded-lg text-white/80 transition hover:bg-raised/10"
             aria-label="Close viewer"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="size-6">

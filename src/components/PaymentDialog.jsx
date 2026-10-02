@@ -140,17 +140,17 @@ export default function PaymentDialog({ open, target, onClose, onConfirm, busy }
       <form id="payment-form" onSubmit={submit} className="space-y-4">
         {/* ----------------------------------------------------- target card */}
         <div
-          className={`rounded-xl border bg-slate-50 p-3.5 text-sm ${
-            statusTone === 'emerald' ? 'border-emerald-200' : statusTone === 'red' ? 'border-red-200' : 'border-slate-200'
+          className={`rounded-xl border bg-sunken p-3.5 text-sm ${
+            statusTone === 'emerald' ? 'border-emerald-200' : statusTone === 'red' ? 'border-red-200' : 'border-line'
           }`}
         >
           <div className="flex items-baseline justify-between gap-3">
-            <p className="text-xs font-medium text-slate-500">Total due</p>
-            <p className="text-lg font-bold text-slate-900 tabular-nums">{formatRupees(rentAmount)}</p>
+            <p className="text-xs font-medium text-ink-subtle">Total due</p>
+            <p className="text-lg font-bold text-ink tabular-nums">{formatRupees(rentAmount)}</p>
           </div>
           <div className="mt-1.5 flex items-baseline justify-between gap-3">
-            <p className="text-xs font-medium text-slate-500">Paid so far</p>
-            <p className="font-semibold text-slate-700 tabular-nums">
+            <p className="text-xs font-medium text-ink-subtle">Paid so far</p>
+            <p className="font-semibold text-ink tabular-nums">
               {formatRupees(rentAmount - remaining)}
               {remaining > 0 && <span className="ml-3 text-xs font-medium text-red-600">{formatRupees(remaining)} left</span>}
             </p>
@@ -179,7 +179,7 @@ export default function PaymentDialog({ open, target, onClose, onConfirm, busy }
                 ? 'border-amber-200 bg-amber-50 text-amber-800'
                 : numericAmount >= remaining
                   ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                  : 'border-slate-200 bg-slate-50 text-slate-600'
+                  : 'border-line bg-sunken text-ink-muted'
             }`}
           >
             {remaining <= 0
@@ -211,7 +211,7 @@ export default function PaymentDialog({ open, target, onClose, onConfirm, busy }
               <button
                 key={chip.label}
                 type="button"
-                className="chip border-slate-200 text-slate-600"
+                className="chip border-line text-ink-muted"
                 onClick={() => setAmount(String(chip.amount))}
               >
                 {chip.label}
@@ -255,7 +255,7 @@ export default function PaymentDialog({ open, target, onClose, onConfirm, busy }
 
         <div>
           <label className="field-label" htmlFor="payment-note">
-            Note <span className="font-normal text-slate-400">(optional)</span>
+            Note <span className="font-normal text-ink-subtle">(optional)</span>
           </label>
           <input
             id="payment-note"
@@ -270,7 +270,7 @@ export default function PaymentDialog({ open, target, onClose, onConfirm, busy }
 
         {error && <p className="field-error">{error}</p>}
 
-        <p className="rounded-xl bg-slate-50 px-3.5 py-3 text-xs leading-relaxed text-slate-500">
+        <p className="rounded-xl bg-sunken px-3.5 py-3 text-xs leading-relaxed text-ink-subtle">
           {isBill
             ? 'Recording a bill payment updates the bill balance. Rent is never affected by a light bill payment.'
             : 'A partial payment leaves the due date unchanged. Settling in full opens the next month cycle; any surplus rolls into it automatically.'}

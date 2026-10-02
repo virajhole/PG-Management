@@ -48,6 +48,17 @@ export function normalizeCustomer(raw = {}) {
     depositPaid: raw.depositPaid ?? false,
     roomNo: raw.roomNo || '',
     bedNo: raw.bedNo || '',
+    // Room assignment is owned by the lifecycle RPCs, so the id is carried
+    // alongside the display numbers for the move/history dialogs.
+    roomId: raw.roomId || null,
+    // Lifecycle. `status` alone is not enough: a tenant on notice still holds a
+    // bed, and a vacated one carries the settlement figures for the receipt.
+    expectedLeavingDate: raw.expectedLeavingDate || null,
+    noticeGivenAt: raw.noticeGivenAt || null,
+    noticeNote: raw.noticeNote || '',
+    vacatedAt: raw.vacatedAt || null,
+    damageCharges: Number(raw.damageCharges) || 0,
+    depositRefund: Number(raw.depositRefund) || 0,
     notes: raw.notes || '',
     // dueDay is the day-of-month anchor taken from the joining date. Keeping it
     // explicit stops a 31st-joiner from drifting to the 28th after February.
@@ -69,9 +80,10 @@ export function normalizeCustomer(raw = {}) {
 
 /**
  * Derive the next PG-000N code from what already exists, so codes stay unique
- * even after deletions or across a re-seed.
+ * even after deletions or across a re-seed. Exported for the admission RPC
+ * path, which bypasses createCustomer and must carry the code itself.
  */
-function nextCustomerCode(existing) {
+export function nextCustomerCode(existing) {
   const max = existing.reduce((acc, c) => {
     const n = Number(String(c.code || '').replace(/\D/g, ''));
     return Number.isFinite(n) && n > acc ? n : acc;
@@ -142,7 +154,9 @@ export function sortByDueDate(list, today = dayjs()) {
 }
 
 export function summarise(list, today = dayjs()) {
-  const active = list.filter((c) => c.status !== 'inactive');
+  // `active` and `notice` both hold a bed and both owe rent; only `vacated` is
+  // out of scope. (The pre-002 `'inactive'` value no longer exists.)
+  const active = list.filter((c) => c.status === 'active' || c.status === 'notice' || !c.status);
   let overdue = 0;
   let dueSoon = 0;
   let expected = 0;

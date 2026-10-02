@@ -17,12 +17,25 @@ import { dayjs, daysDiff, advanceDueDate } from './dateLogic.js';
 
 export const TX_RENT = 'RENT';
 export const TX_LIGHT_BILL = 'LIGHT_BILL';
+// Written by the checkout RPC. It is money going *out* (a deposit refund), not
+// a payment against a cycle, so it never reduces what a tenant owes.
+export const TX_REFUND = 'REFUND';
+// Optional admin-confirmed late fee line (migration 004). Flows through the
+// same ledger maths as rent so it counts in collections and reduces balance.
+export const TX_LATE_FEE = 'LATE_FEE';
 
 export const TX_TYPES = [
   { value: 'all', label: 'All' },
   { value: TX_RENT, label: 'Rent' },
   { value: TX_LIGHT_BILL, label: 'Light bill' },
+  { value: TX_LATE_FEE, label: 'Late fee' },
+  { value: TX_REFUND, label: 'Deposit refund' },
 ];
+
+/** True when a transaction adds to cash in rather than taking it out. */
+export function isIncoming(tx) {
+  return tx?.type !== TX_REFUND;
+}
 
 export const PAYMENT_MODES = [
   { value: 'cash', label: 'Cash' },
@@ -234,9 +247,17 @@ export function monthRange(key) {
 
 /** Sum a list of transactions, split by type. */
 export function sumTransactions(transactions = []) {
-  const totals = { total: 0, rent: 0, lightBill: 0, count: transactions.length };
+  const totals = { total: 0, rent: 0, lightBill: 0, refund: 0, count: transactions.length };
   for (const tx of transactions) {
     const amount = toAmount(tx?.amount);
+    // A deposit refund is cash leaving the business. Folding it into `rent`
+    // would inflate collections, so it gets its own bucket and is subtracted
+    // from the net.
+    if (tx?.type === TX_REFUND) {
+      totals.refund = money(totals.refund + amount);
+      totals.total = money(totals.total - amount);
+      continue;
+    }
     totals.total = money(totals.total + amount);
     if (tx?.type === TX_LIGHT_BILL) totals.lightBill = money(totals.lightBill + amount);
     else totals.rent = money(totals.rent + amount);
@@ -312,7 +333,7 @@ export function toCsv(transactions = []) {
   const rows = transactions.map((tx) => [
     dayjs(tx.date).format('YYYY-MM-DD'),
     tx.customerName ?? '',
-    tx.type === TX_LIGHT_BILL ? 'Light bill' : 'Rent',
+    tx.type === TX_LIGHT_BILL ? 'Light bill' : tx.type === TX_REFUND ? 'Deposit refund' : 'Rent',
     money(tx.amount).toFixed(2),
     tx.mode ?? '',
     tx.cycleId || tx.billId || '',
@@ -350,7 +371,9 @@ export function getPendingList({ customers = [], cycles = [], lightBills = [], t
 
   const rows = [];
   for (const customer of customers) {
-    if (customer.status === 'inactive') continue;
+    // A checked-out tenant is not "pending" anything. `notice` tenants still
+    // hold a bed and still owe rent, so they stay in the list.
+    if (customer.status === 'vacated') continue;
 
     const cycle = cycleByCustomer.get(customer.id) ?? null;
     const rentRemaining = getRemaining(cycle);

@@ -7,9 +7,10 @@ import { MemoryRouter } from 'react-router-dom';
 
 vi.mock('../services/supabase.js', async () => await import('../test/supabaseFake.js'));
 
-import { ToastProvider } from '../context/ToastContext.jsx';
+import { ToastProvider, getQueuedToasts } from '../context/ToastContext.jsx';
 import { AuthProvider } from '../context/AuthContext.jsx';
 import { DataProvider } from '../context/DataContext.jsx';
+import { ThemeProvider } from '../context/ThemeContext.jsx';
 import Dashboard from './Dashboard.jsx';
 import Settings from './Settings.jsx';
 import Admission from './Admission.jsx';
@@ -39,14 +40,16 @@ const table = async () => within(await screen.findByTestId('customer-table'));
 function renderApp(ui) {
   return render(
     <MemoryRouter>
-      <ToastProvider>
-        <AuthProvider>
-          <DataProvider>
-            {ui}
-            <Toaster />
-          </DataProvider>
-        </AuthProvider>
-      </ToastProvider>
+      <ThemeProvider>
+        <ToastProvider>
+          <AuthProvider>
+            <DataProvider>
+              {ui}
+              <Toaster />
+            </DataProvider>
+          </AuthProvider>
+        </ToastProvider>
+      </ThemeProvider>
     </MemoryRouter>,
   );
 }
@@ -106,14 +109,15 @@ describe('Dashboard', () => {
     renderApp(<Dashboard />);
     await list();
 
-    expect(screen.getByText('Total tenants')).toBeInTheDocument();
-    expect(screen.getByText('Rent overdue')).toBeInTheDocument();
+    expect(screen.getByText('Total customers')).toBeInTheDocument();
+    expect(screen.getAllByText('Overdue').length).toBeGreaterThan(0);
     expect(screen.getByText('Collected this month')).toBeInTheDocument();
-    expect(screen.getByText('Outstanding')).toBeInTheDocument();
+    expect(screen.getByText('Remaining rent')).toBeInTheDocument();
 
-    // Seed deposits: Rahul 5,000 + Imran 5,000 + Aman 8,000 + Priya 18,000
-    // + Deepak 15,000 rent, plus Deepak's 764 light bill payment.
-    expect(screen.getByText('Rs 51,764')).toBeInTheDocument();
+    // Seed payments this month: Rahul 5,000 + Imran 5,000 + Aman 8,000 +
+    // Priya 18,000 + Deepak 9,000 (room 207's rent override wins over his
+    // sharing price), plus Deepak's 764 light bill payment.
+    await waitFor(() => expect(screen.getByText('Rs 45,764')).toBeInTheDocument());
   });
 
   it('filters with the chip row', async () => {
@@ -121,11 +125,14 @@ describe('Dashboard', () => {
     renderApp(<Dashboard />);
     const cards = await list();
 
-    await user.click(screen.getByRole('button', { name: /^Overdue/ }));
+    // The chips render above the list ul (so the `cards` scope cannot see
+    // them). The dashboard also has an "Overdue tenants" attention tile, but
+    // only the filter chip carries a count in its accessible name.
+    await user.click(screen.getByRole('button', { name: /^Overdue \d+$/ }));
     expect(cards.getByText('Rahul Sharma')).toBeInTheDocument();
     expect(cards.queryByText('Sneha Patil')).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /^All/ }));
+    await user.click(screen.getByRole('button', { name: /^All \d+$/ }));
     expect(cards.getByText('Sneha Patil')).toBeInTheDocument();
   });
 
@@ -346,16 +353,24 @@ describe('Admission form', () => {
     await fillRequiredFields(user);
     await user.click(screen.getByLabelText(/I have read and agree/));
 
+    // Seeded rooms make a room mandatory - pick a free 3-sharing bed.
+    await user.click(await screen.findByRole('button', { name: /^Room 205 / }));
+
     const joinDate = dayjs().subtract(2, 'month').date(15).format('YYYY-MM-DD');
     await user.clear(screen.getByLabelText(/Joining date/));
     await user.type(screen.getByLabelText(/Joining date/), joinDate);
 
     await user.click(screen.getByRole('button', { name: /Complete admission/ }));
 
-    expect(await screen.findByText(/Test Person admitted/)).toBeInTheDocument();
+    // The success toast races the navigate('/') that follows it; assert through
+    // the module-level toast log, which is written synchronously on push().
+    await waitFor(() => {
+      expect(getQueuedToasts().some((t) => t.message.includes('Test Person admitted'))).toBe(true);
+    });
 
     const created = (await listCustomers()).find((c) => c.name === 'Test Person');
     expect(created.nextDueDate).toBe(dayjs().subtract(1, 'month').date(15).format('YYYY-MM-DD'));
+    expect(created.code).toMatch(/^PG-\d{4}$/);
     expect(created.dueDay).toBe(15);
     expect(created.termsAccepted).toBe(true);
     expect(created.code).toMatch(/^PG-\d{4}$/);
@@ -368,21 +383,33 @@ describe('Admission form', () => {
     await fillRequiredFields(user);
     await user.click(screen.getByLabelText(/I have read and agree/));
 
-    const joinDate = dayjs().subtract(1, 'month').date(31).format('YYYY-MM-DD');
+    // Seeded rooms make a room mandatory - pick a free 3-sharing bed.
+    await user.click(await screen.findByRole('button', { name: /^Room 205 / }));
+
+    // Anchored to a fixed month that actually has 31 days. Deriving this from
+    // "today" (e.g. dayjs().subtract(1, 'month').date(31)) silently rolls
+    // forward into the next month whenever today is the 1st or 2nd, which made
+    // this test fail depending on the day it ran.
+    const joinDate = dayjs('2025-01-31').format('YYYY-MM-DD');
     const joinInput = screen.getByLabelText(/Joining date/);
     await user.clear(joinInput);
     await user.type(joinInput, joinDate);
 
     await user.click(screen.getByRole('button', { name: /Complete admission/ }));
+    await waitFor(() => {
+      expect(getQueuedToasts().some((t) => t.message.includes('Test Person admitted'))).toBe(true);
+    });
     await screen.findByText(/Test Person admitted/);
 
     const created = (await listCustomers()).find((c) => c.name === 'Test Person');
     // The 31st must clamp to the last day of whatever month we land in,
-    // never spill over into the next month.
+    // never spill over into the next month. 31 Jan -> 28 Feb (2026 is not a
+    // leap year).
     const due = dayjs(created.nextDueDate);
     const anchor = dayjs(created.joiningDate).date();
     expect(anchor).toBe(31);
+    expect(due.format('YYYY-MM')).toBe('2025-02');
     expect(due.date()).toBe(Math.min(anchor, due.daysInMonth()));
-    expect(due.format('YYYY-MM')).toBe(dayjs(created.joiningDate).add(1, 'month').format('YYYY-MM'));
+    expect(due.date()).toBe(28);
   });
 });

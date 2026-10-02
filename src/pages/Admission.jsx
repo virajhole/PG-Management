@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { TextField, Textarea, SelectField } from '../components/FormFields.jsx';
@@ -9,29 +9,112 @@ import { UserPlusIcon, LockIcon } from '../components/icons.jsx';
 import { useData } from '../context/DataContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
 import { customerSchema, PROOF_TYPES, sanitiseAadhaar, sanitisePan, sanitiseMobile, getProofHint } from '../utils/validation.js';
-import { getRentForSharing, SHARING_TYPES } from '../services/index.js';
+import { getRentForSharing, SHARING_TYPES, roomService } from '../services/index.js';
+import { nextCustomerCode } from '../services/customerService.js';
 import { formatCurrency, formatDate } from '../utils/format.js';
 import { getNextDueDate, todayISO, dayjs } from '../utils/dateLogic.js';
 
 function Section({ title, description, children }) {
   return (
     <section className="card p-4 sm:p-5">
-      <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
-      {description && <p className="mt-0.5 mb-4 text-xs text-slate-500">{description}</p>}
+      <h2 className="text-sm font-semibold text-ink">{title}</h2>
+      {description && <p className="mt-0.5 mb-4 text-xs text-ink-subtle">{description}</p>}
       <div className={description ? '' : 'mt-4'}>{children}</div>
     </section>
   );
 }
 
+/**
+ * Room picker. Only rooms that match the chosen sharing type *and* still have a
+ * free bed are offered - picking a bed here is a convenience, and the RPC
+ * re-checks under a lock when the admission is saved.
+ */
+function RoomPicker({ rooms, selectedRoomId, bedNo, onSelect, onBedChange, prefillRent }) {
+  if (rooms.length === 0) {
+    return (
+      <div className="rounded-xl border border-dashed border-line-strong p-4 text-center">
+        <p className="text-sm font-medium text-ink">No matching rooms with a free bed</p>
+        <p className="mt-1 text-xs text-ink-subtle">
+          Add rooms on the Rooms page, or pick a different sharing type.
+        </p>
+      </div>
+    );
+  }
+
+  const room = rooms.find((r) => r.id === selectedRoomId);
+
+  return (
+    <div className="space-y-3">
+      <div className="scroll-slim -mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+        {rooms.map((option) => {
+          const selected = option.id === selectedRoomId;
+          const beds = roomService.freeBeds(option);
+          return (
+            <button
+              key={option.id}
+              type="button"
+              onClick={() => onSelect(option)}
+              aria-pressed={selected}
+              className={`min-w-36 shrink-0 rounded-xl border p-3 text-left transition ${
+                selected
+                  ? 'border-brand-500 bg-brand-50 ring-2 ring-brand-500/20 dark:bg-brand-950'
+                  : 'border-line-strong bg-raised hover:border-brand-300'
+              }`}
+            >
+              <p className="text-sm font-semibold text-ink">Room {option.roomNo}</p>
+              <p className="mt-0.5 text-[11px] text-ink-subtle">
+                Floor {option.floor} &middot; {option.vacant} bed{option.vacant === 1 ? '' : 's'} free
+              </p>
+              <p className="mt-0.5 text-[11px] font-medium text-brand-700 dark:text-brand-300">
+                {prefillRent(option)}
+              </p>
+              {/* Keep the bed numbers out of the button label so the accessible
+                  name stays the room, not a run of digits. */}
+              <span className="sr-only">Free beds: {beds.join(', ')}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {room && (
+        <div>
+          <span className="field-label">Bed</span>
+          <div className="flex flex-wrap gap-2">
+            {roomService.freeBeds(room).map((bed) => (
+              <button
+                key={bed}
+                type="button"
+                onClick={() => onBedChange(String(bed))}
+                aria-pressed={String(bed) === String(bedNo)}
+                className={`flex size-11 items-center justify-center rounded-xl border text-sm font-semibold transition ${
+                  String(bed) === String(bedNo)
+                    ? 'border-brand-500 bg-brand-600 text-white'
+                    : 'border-line-strong bg-raised text-ink hover:border-brand-300'
+                }`}
+              >
+                {bed}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Admission() {
-  const { settings, createCustomer, setCustomerImage } = useData();
+  const { settings, customers, createCustomer, setCustomerImage, refresh } = useData();
   const toast = useToast();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const termsBoxRef = useRef(null);
 
   // Once the admin types their own rent we stop overwriting it on sharing change.
   const rentOverridden = useRef(false);
   const [submitting, setSubmitting] = useState(false);
+  const [rooms, setRooms] = useState([]);
+  const [roomsStatus, setRoomsStatus] = useState('loading');
+  const preselected = useRef(false);
 
   const {
     register,
@@ -64,21 +147,90 @@ export default function Admission() {
       depositAmount: settings.defaultDeposit ?? 5000,
       notes: '',
       termsAccepted: false,
+      roomId: '',
     },
   });
 
-  const sharingType = watch('sharingType');
+  const sharingType = Number(watch('sharingType'));
   const joiningDate = watch('joiningDate');
   const proofType = watch('proofType');
   const rentAmount = watch('rentAmount');
+  const roomId = watch('roomId');
+  const bedNo = watch('bedNo');
   const terms = settings.terms || '';
 
-  // Auto-fill rent from the Settings price for the chosen sharing type.
+  useEffect(() => {
+    let cancelled = false;
+    roomService
+      .listRooms()
+      .then((list) => {
+        if (!cancelled) {
+          setRooms(list);
+          setRoomsStatus('ready');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setRoomsStatus('error');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const pickRoom = useCallback(
+    (room) => {
+      const [firstFree] = roomService.freeBeds(room);
+      setValue('roomId', room.id, { shouldValidate: true, shouldDirty: true });
+      setValue('roomNo', room.roomNo, { shouldValidate: true, shouldDirty: true });
+      setValue('bedNo', firstFree ? String(firstFree) : '', { shouldValidate: true, shouldDirty: true });
+      setValue('sharingType', String(room.sharingType), { shouldValidate: true, shouldDirty: true });
+      rentOverridden.current = false;
+    },
+    [setValue],
+  );
+
+  // Rooms page links here as /admission?room=<id>&sharing=<n>. Once the list
+  // arrives, preselect that room so the first free bed is already filled in.
+  useEffect(() => {
+    if (roomsStatus !== 'ready' || preselected.current) return;
+    preselected.current = true;
+    const wanted = searchParams.get('room');
+    if (!wanted) return;
+    const target = rooms.find((room) => room.id === wanted);
+    if (target && roomService.hasVacancy(target)) pickRoom(target);
+  }, [roomsStatus, rooms, searchParams, pickRoom]);
+
+  /** Rooms that match the sharing type and still have a free bed. */
+  const matchingRooms = useMemo(
+    () => roomService.availableRooms(rooms, sharingType),
+    [rooms, sharingType],
+  );
+
+  const selectedRoom = useMemo(
+    () => rooms.find((room) => room.id === roomId) ?? null,
+    [rooms, roomId],
+  );
+
+  /**
+   * A room's own rent override wins; otherwise the Settings price. Keeping this
+   * in one place means the picker preview and the saved value cannot disagree.
+   */
+  const rentForRoom = useCallback(
+    (room) => formatCurrency(roomService.effectiveRent(room, settings)),
+    [settings],
+  );
+
+  // Auto-fill rent: the selected room's override if there is one, else the
+  // Settings price for the sharing type.
   useEffect(() => {
     if (rentOverridden.current) return;
-    const price = getRentForSharing(settings, sharingType);
+    const price = selectedRoom
+      ? roomService.effectiveRent(selectedRoom, settings)
+      : getRentForSharing(settings, sharingType);
     if (price) setValue('rentAmount', price, { shouldValidate: true, shouldDirty: true });
-  }, [sharingType, settings, setValue]);
+  }, [sharingType, selectedRoom, settings, setValue]);
+
+  const roomsRequired = roomsStatus === 'ready' && rooms.length > 0;
 
   const previewDueDate = useMemo(() => {
     if (!joiningDate) return null;
@@ -92,23 +244,55 @@ export default function Admission() {
   async function onSubmit(values) {
     setSubmitting(true);
     try {
-      const created = await createCustomer({
+      // When rooms exist, the tenant must be placed in one. The RPC re-checks
+      // capacity under a row lock, so a room that filled up in another tab
+      // fails cleanly here instead of double-booking a bed.
+      if (roomsRequired && !values.roomId) {
+        throw new Error('Choose a room with a free bed.');
+      }
+
+      const dueDay = Number(dayjs(values.joiningDate).date()) || 1;
+      const payload = {
         ...values,
+        sharingType: Number(values.sharingType),
+        rentAmount: Number(values.rentAmount) || 0,
+        depositAmount: Number(values.depositAmount) || 0,
+        // The RPC path skips createCustomer, so the code / due-anchor math that
+        // the plain path gets for free must ride along in the payload. The
+        // admit RPC coalesces all three from it.
+        code: nextCustomerCode(customers),
+        dueDay,
+        nextDueDate: getNextDueDate(values.joiningDate, 1, dueDay),
         proofImage: undefined,
         photo: undefined,
-      });
+      };
 
-      // Images live in IndexedDB, the record only keeps the resulting keys -
-      // so they are written once the customer (and its id) exists.
-      if (values.proofImage) await setCustomerImage(created.id, 'proof', values.proofImage);
-      if (values.photo) await setCustomerImage(created.id, 'photo', values.photo);
+      // With rooms on file the bed is assigned inside the locked RPC; without
+      // them there is nothing to reserve, so the plain create path is correct.
+      const customer = roomsRequired
+        ? await roomService
+            .admitCustomer(payload, values.roomId, values.bedNo)
+            .then((result) => ({ id: result.customerId }))
+        : await createCustomer(payload);
+
+      // Images are written once the customer (and its id) exists.
+      if (values.proofImage) await setCustomerImage(customer.id, 'proof', values.proofImage);
+      if (values.photo) await setCustomerImage(customer.id, 'photo', values.photo);
+
+      await refresh();
 
       reset();
+      preselected.current = true;
       rentOverridden.current = false;
+      // Hold the success toast for a beat when navigating away: happy-dom (and
+      // the occasional slow real device) unmounts the page before AnimatePresence
+      // can fire the toast, so the confirmation could silently never appear.
       toast.success(
-        `${values.name} admitted. First rent due ${formatDate(created.nextDueDate)} (${formatCurrency(created.rentAmount)}).`,
+        roomsRequired
+          ? `${values.name} admitted to room ${values.roomNo} bed ${values.bedNo}. First rent due ${formatDate(customer.nextDueDate ?? values.joiningDate)}.`
+          : `${values.name} admitted. First rent due ${formatDate(customer.nextDueDate)} (${formatCurrency(customer.rentAmount)}).`,
       );
-      navigate('/', { replace: true });
+      setTimeout(() => navigate('/', { replace: true }), 0);
     } catch (error) {
       toast.error(error.message || 'Could not save this admission. Please try again.');
     } finally {
@@ -119,8 +303,8 @@ export default function Admission() {
   return (
     <div className="mx-auto max-w-3xl space-y-4 pb-4">
       <header>
-        <h1 className="text-xl font-bold text-slate-900 sm:text-2xl">New admission</h1>
-        <p className="mt-0.5 text-sm text-slate-500">
+        <h1 className="text-xl font-bold text-ink sm:text-2xl">New admission</h1>
+        <p className="mt-0.5 text-sm text-ink-subtle">
           Register a new paying guest. Required fields are marked with <span className="text-red-500">*</span>.
         </p>
       </header>
@@ -278,7 +462,31 @@ export default function Admission() {
         </Section>
 
         {/* ------------------------------------------------- allocation */}
-        <Section title="Room & rent">
+        <Section
+          title="Room & rent"
+          description={
+            roomsStatus === 'loading'
+              ? 'Loading rooms...'
+              : roomsRequired
+                ? 'Pick a room with a free bed. Only rooms matching the sharing type are listed.'
+                : 'No rooms are set up yet, so room and bed are optional for now.'
+          }
+        >
+          {roomsRequired && (
+            <div className="mb-4">
+              <RoomPicker
+                rooms={matchingRooms}
+                selectedRoomId={roomId}
+                bedNo={bedNo}
+                onSelect={pickRoom}
+                onBedChange={(value) =>
+                  setValue('bedNo', value, { shouldValidate: true, shouldDirty: true })
+                }
+                prefillRent={rentForRoom}
+              />
+            </div>
+          )}
+
           <div className="grid gap-4 sm:grid-cols-2">
             <TextField
               id="joiningDate"
@@ -326,20 +534,6 @@ export default function Admission() {
               error={errors.depositAmount?.message}
               {...register('depositAmount')}
             />
-            <TextField
-              id="roomNo"
-              label="Room number"
-              placeholder="e.g. 204"
-              error={errors.roomNo?.message}
-              {...register('roomNo')}
-            />
-            <TextField
-              id="bedNo"
-              label="Bed number"
-              placeholder="e.g. A"
-              error={errors.bedNo?.message}
-              {...register('bedNo')}
-            />
             <Textarea
               id="notes"
               label="Notes"
@@ -358,8 +552,8 @@ export default function Admission() {
         >
           <div
             ref={termsBoxRef}
-            className="scroll-slim max-h-64 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-4
-                       text-sm leading-relaxed whitespace-pre-line text-slate-700"
+            className="scroll-slim max-h-64 overflow-y-auto rounded-xl border border-line bg-sunken p-4
+                       text-sm leading-relaxed whitespace-pre-line text-ink"
             tabIndex={0}
             role="region"
             aria-label="Terms and conditions"
@@ -367,7 +561,7 @@ export default function Admission() {
             {terms}
           </div>
 
-          <p className="mt-2 text-xs text-slate-500">
+          <p className="mt-2 text-xs text-ink-subtle">
             These terms are editable from <span className="font-medium">Settings</span>.
           </p>
 
@@ -377,7 +571,7 @@ export default function Admission() {
                 ? 'border-red-300 bg-red-50'
                 : touchedFields.termsAccepted && !errors.termsAccepted
                   ? 'border-brand-300 bg-brand-50'
-                  : 'border-slate-200 bg-white hover:border-slate-300'
+                  : 'border-line bg-raised hover:border-line-strong'
             }`}
           >
             <input
@@ -385,7 +579,7 @@ export default function Admission() {
               className="mt-0.5 size-5 shrink-0 accent-brand-600"
               {...register('termsAccepted')}
             />
-            <span className="text-sm leading-relaxed font-medium text-slate-800">
+            <span className="text-sm leading-relaxed font-medium text-ink">
               I have read and agree to the Terms &amp; Conditions above.
               <span className="ml-0.5 text-red-500">*</span>
             </span>
@@ -394,12 +588,12 @@ export default function Admission() {
         </Section>
 
         {/* -------------------------------------------------------- submit */}
-        <div className="sticky bottom-20 z-10 -mx-4 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur lg:bottom-0 lg:mx-0 lg:rounded-2xl lg:border">
+        <div className="sticky bottom-20 z-10 -mx-4 border-t border-line bg-raised/95 px-4 py-3 backdrop-blur lg:bottom-0 lg:mx-0 lg:rounded-2xl lg:border">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0 text-xs text-slate-500">
+            <div className="min-w-0 text-xs text-ink-subtle">
               {previewDueDate ? (
                 <>
-                  First rent due <span className="font-semibold text-slate-700">{formatDate(previewDueDate)}</span>
+                  First rent due <span className="font-semibold text-ink">{formatDate(previewDueDate)}</span>
                   {' · '}
                   {formatCurrency(rentAmount || 0)} per month
                 </>
@@ -418,7 +612,7 @@ export default function Admission() {
             </button>
           </div>
           {!isValid && (
-            <p className="mt-2 text-[11px] text-slate-400">
+            <p className="mt-2 text-[11px] text-ink-subtle">
               Complete the required fields and accept the Terms &amp; Conditions to continue.
             </p>
           )}

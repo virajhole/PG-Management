@@ -19,6 +19,7 @@ import {
   getPendingList,
   getOutstandingTotals,
   TX_RENT,
+  TX_REFUND,
   TX_LIGHT_BILL,
 } from './ledger.js';
 import { dayjs } from './dateLogic.js';
@@ -310,6 +311,48 @@ describe('collection totals', () => {
     expect(t.lightBill).toBe(350);
     expect(getMonthTotal(list, '2024-04').total).toBe(900);
   });
+
+  it('keeps a notice tenant in the pending list but drops a vacated one', () => {
+    // 'notice' still holds a bed and still owes rent; only 'vacated' is out of
+    // scope. The pre-002 code filtered on an 'inactive' flag that no longer
+    // exists, which let checked-out tenants show as pending.
+    const rows = getPendingList({
+      customers: [
+        { id: 'cus_1', name: 'Noticed', rentAmount: 5000, nextDueDate: '2024-05-10', status: 'notice' },
+        { id: 'cus_2', name: 'Gone', rentAmount: 5000, nextDueDate: '2024-05-10', status: 'vacated' },
+      ],
+      cycles: [
+        cycle({ id: 'cyc_1', customerId: 'cus_1', dueDate: '2024-05-10', rentAmount: 5000 }),
+        cycle({ id: 'cyc_2', customerId: 'cus_2', dueDate: '2024-05-10', rentAmount: 5000 }),
+      ],
+      lightBills: [],
+    });
+    expect(rows.map((r) => r.name)).toEqual(['Noticed']);
+  });
+
+  it('keeps a deposit refund out of rent and out of gross collections', () => {
+    // A refund is cash going back out. It must not inflate the rent collected
+    // figure, and the net total has to come down by the refunded amount.
+    const withRefund = [
+      tx({ id: 'a', amount: 11500, date: '2024-05-10', type: TX_RENT }),
+      tx({ id: 'r', amount: 4000, date: '2024-05-12', type: TX_REFUND }),
+    ];
+    const t = sumTransactions(withRefund);
+    expect(t.rent).toBe(11500);
+    expect(t.refund).toBe(4000);
+    expect(t.total).toBe(7500);
+    expect(t.count).toBe(2);
+  });
+
+  it('reports a fully refunded month as a negative net, not zero', () => {
+    const t = getMonthTotal(
+      [tx({ id: 'r', amount: 2500, date: '2024-05-20', type: TX_REFUND })],
+      '2024-05',
+    );
+    expect(t.total).toBe(-2500);
+    expect(t.rent).toBe(0);
+    expect(t.refund).toBe(2500);
+  });
 });
 
 describe('filterTransactions', () => {
@@ -372,7 +415,7 @@ describe('getPendingList', () => {
   const customers = [
     { id: 'cus_1', name: 'Rahul Sharma', mobile: '9876543210', code: 'PG-0001', rentAmount: 11500, nextDueDate: '2024-05-10' },
     { id: 'cus_2', name: 'Aman Verma', mobile: '9123456780', code: 'PG-0002', rentAmount: 13000, nextDueDate: '2024-06-12' },
-    { id: 'cus_3', name: 'Sneha Patil', mobile: '9988776655', code: 'PG-0003', rentAmount: 11500, nextDueDate: '2024-05-12', status: 'inactive' },
+    { id: 'cus_3', name: 'Sneha Patil', mobile: '9988776655', code: 'PG-0003', rentAmount: 11500, nextDueDate: '2024-05-12', status: 'vacated' },
     { id: 'cus_4', name: 'Imran Sheikh', mobile: '9555444332', code: 'PG-0004', rentAmount: 10500, nextDueDate: '2024-06-30', advanceCredit: 500 },
   ];
 

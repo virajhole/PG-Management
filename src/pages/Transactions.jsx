@@ -13,12 +13,18 @@ import {
   toCsv,
   TX_RENT,
   TX_LIGHT_BILL,
+  TX_REFUND,
+  isIncoming,
   monthKey,
   monthRange,
   formatMonthLabel,
 } from '../utils/ledger.js';
 
-const TYPE_LABEL = { [TX_RENT]: 'Rent', [TX_LIGHT_BILL]: 'Light bill' };
+const TYPE_LABEL = {
+  [TX_RENT]: 'Rent',
+  [TX_LIGHT_BILL]: 'Light bill',
+  [TX_REFUND]: 'Deposit refund',
+};
 const MODE_LABEL = { cash: 'Cash', upi: 'UPI', bank: 'Bank transfer' };
 
 const RANGES = [
@@ -30,13 +36,13 @@ const RANGES = [
 
 function SummaryCard({ label, value, sub, icon: Icon, tone = 'slate' }) {
   const tones = {
-    slate: 'text-slate-900',
+    slate: 'text-ink',
     red: 'text-red-600',
     amber: 'text-amber-600',
     brand: 'text-brand-600',
   };
   const iconTones = {
-    slate: 'bg-slate-100 text-slate-500',
+    slate: 'bg-sunken text-ink-subtle',
     red: 'bg-red-100 text-red-600',
     amber: 'bg-amber-100 text-amber-600',
     brand: 'bg-brand-50 text-brand-600',
@@ -47,9 +53,9 @@ function SummaryCard({ label, value, sub, icon: Icon, tone = 'slate' }) {
         <Icon className="size-5" />
       </div>
       <div className="min-w-0">
-        <p className="truncate text-xs font-medium text-slate-500">{label}</p>
+        <p className="truncate text-xs font-medium text-ink-subtle">{label}</p>
         <p className={`mt-0.5 truncate text-xl leading-tight font-bold ${tones[tone]}`}>{value}</p>
-        {sub && <p className="mt-0.5 truncate text-[11px] text-slate-400">{sub}</p>}
+        {sub && <p className="mt-0.5 truncate text-[11px] text-ink-subtle">{sub}</p>}
       </div>
     </div>
   );
@@ -149,8 +155,8 @@ export default function TransactionsPage() {
       {/* ----------------------------------------------------------- header */}
       <header className="flex flex-wrap items-end justify-between gap-3 print:hidden">
         <div>
-          <h1 className="text-xl font-bold text-slate-900 sm:text-2xl">Transactions</h1>
-          <p className="mt-0.5 text-sm text-slate-500">
+          <h1 className="text-xl font-bold text-ink sm:text-2xl">Transactions</h1>
+          <p className="mt-0.5 text-sm text-ink-subtle">
             Every rupee received - rent and light bills - across all tenants.
           </p>
         </div>
@@ -206,7 +212,7 @@ export default function TransactionsPage() {
             className={`chip ${
               tab === t.key
                 ? 'border-brand-600 bg-brand-600 text-white'
-                : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
+                : 'border-line bg-raised text-ink-muted hover:border-line-strong hover:bg-sunken'
             }`}
           >
             {t.label}
@@ -221,7 +227,7 @@ export default function TransactionsPage() {
           {/* --------------------------------------------------------- filters */}
           <div className="card p-3 print:hidden">
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-              <label className="flex flex-col gap-1 text-xs font-medium text-slate-500">
+              <label className="flex flex-col gap-1 text-xs font-medium text-ink-subtle">
                 Type
                 <select className="field-input" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
                   <option value="all">All</option>
@@ -229,7 +235,7 @@ export default function TransactionsPage() {
                   <option value={TX_LIGHT_BILL}>Light bill</option>
                 </select>
               </label>
-              <label className="flex flex-col gap-1 text-xs font-medium text-slate-500">
+              <label className="flex flex-col gap-1 text-xs font-medium text-ink-subtle">
                 Mode
                 <select className="field-input" value={modeFilter} onChange={(e) => setModeFilter(e.target.value)}>
                   <option value="all">All</option>
@@ -240,7 +246,7 @@ export default function TransactionsPage() {
                   ))}
                 </select>
               </label>
-              <label className="flex flex-col gap-1 text-xs font-medium text-slate-500">
+              <label className="flex flex-col gap-1 text-xs font-medium text-ink-subtle">
                 Date range
                 <select className="field-input" value={range} onChange={(e) => setRange(e.target.value)}>
                   {RANGES.map((r) => (
@@ -268,7 +274,7 @@ export default function TransactionsPage() {
               />
             </div>
             {monthRangeDays(month) && (
-              <p className="mt-2 text-[11px] text-slate-400">
+              <p className="mt-2 text-[11px] text-ink-subtle">
                 {monthLabel} covers {formatDate(monthRange(month).from)} to {formatDate(monthRange(month).to)}.
               </p>
             )}
@@ -285,7 +291,7 @@ export default function TransactionsPage() {
             <div className="card overflow-hidden">
               <div className="scroll-slim max-h-[60dvh] overflow-auto">
                 <table className="w-full border-collapse text-left">
-                  <thead className="sticky top-0 z-10 bg-slate-50 text-xs tracking-wide text-slate-500 uppercase">
+                  <thead className="sticky top-0 z-10 bg-sunken text-xs tracking-wide text-ink-subtle uppercase">
                     <tr>
                       <th className="px-4 py-3 font-semibold">Date</th>
                       <th className="px-3 py-3 font-semibold">Tenant</th>
@@ -299,29 +305,38 @@ export default function TransactionsPage() {
                   <tbody className="divide-y divide-slate-100">
                     {visible.map((tx) => (
                       <tr key={tx.id} className="group">
-                        <td className="px-4 py-3 text-sm whitespace-nowrap text-slate-700 tabular-nums">
+                        <td className="px-4 py-3 text-sm whitespace-nowrap text-ink tabular-nums">
                           {formatDate(tx.date)}
                         </td>
-                        <td className="px-3 py-3 text-sm font-medium text-slate-900">{tx.customerName}</td>
+                        <td className="px-3 py-3 text-sm font-medium text-ink">{tx.customerName}</td>
                         <td className="px-3 py-3">
                           <span
                             className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                              tx.type === TX_LIGHT_BILL ? 'bg-amber-50 text-amber-700' : 'bg-brand-50 text-brand-700'
+                              tx.type === TX_REFUND
+                                ? 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'
+                                : tx.type === TX_LIGHT_BILL
+                                  ? 'bg-amber-50 text-amber-700'
+                                  : 'bg-brand-50 text-brand-700'
                             }`}
                           >
                             {TYPE_LABEL[tx.type] ?? tx.type}
                           </span>
                         </td>
-                        <td className="px-3 py-3 text-right text-sm font-semibold whitespace-nowrap text-emerald-700 tabular-nums">
-                          +{formatRupees(tx.amount)}
+                        <td
+                          className={`px-3 py-3 text-right text-sm font-semibold whitespace-nowrap tabular-nums ${
+                            isIncoming(tx) ? 'text-emerald-700' : 'text-red-700 dark:text-red-400'
+                          }`}
+                        >
+                          {isIncoming(tx) ? '+' : '−'}
+                          {formatRupees(tx.amount)}
                         </td>
-                        <td className="px-3 py-3 text-xs whitespace-nowrap text-slate-500">{MODE_LABEL[tx.mode] ?? tx.mode}</td>
-                        <td className="max-w-48 px-3 py-3 text-xs truncate text-slate-500">{tx.note || '—'}</td>
+                        <td className="px-3 py-3 text-xs whitespace-nowrap text-ink-subtle">{MODE_LABEL[tx.mode] ?? tx.mode}</td>
+                        <td className="max-w-48 px-3 py-3 text-xs truncate text-ink-subtle">{tx.note || '—'}</td>
                         <td className="px-3 py-3 text-right print:hidden">
                           <button
                             type="button"
                             onClick={() => setDeleting(tx)}
-                            className="rounded-lg p-2 text-slate-400 opacity-0 transition hover:bg-red-50 hover:text-red-600 focus:opacity-100 group-hover:opacity-100"
+                            className="rounded-lg p-2 text-ink-subtle opacity-0 transition hover:bg-red-50 hover:text-red-600 focus:opacity-100 group-hover:opacity-100"
                             aria-label={`Delete transaction of ${formatRupees(tx.amount)} on ${formatDate(tx.date)}`}
                           >
                             <TrashIcon className="size-4" />
@@ -360,7 +375,7 @@ export default function TransactionsPage() {
         }
       />
 
-      <p className="pt-2 text-center text-xs text-slate-400 print:hidden">
+      <p className="pt-2 text-center text-xs text-ink-subtle print:hidden">
         {settings.pgName} · transactions are stored on this device only
       </p>
     </div>
@@ -390,7 +405,7 @@ function PendingList({ rows, onPay }) {
       ) : (
         <div className="scroll-slim max-h-[60dvh] overflow-auto">
           <table className="w-full border-collapse text-left">
-            <thead className="sticky top-0 z-10 bg-slate-50 text-xs tracking-wide text-slate-500 uppercase">
+            <thead className="sticky top-0 z-10 bg-sunken text-xs tracking-wide text-ink-subtle uppercase">
               <tr>
                 <th className="px-4 py-3 font-semibold">Tenant</th>
                 <th className="px-3 py-3 text-right font-semibold">Rent left</th>
@@ -404,8 +419,8 @@ function PendingList({ rows, onPay }) {
               {rows.map((row) => (
                 <tr key={row.customerId} className="group">
                   <td className="px-4 py-3">
-                    <p className="text-sm font-semibold text-slate-900">{row.name}</p>
-                    <p className="text-xs text-slate-500">
+                    <p className="text-sm font-semibold text-ink">{row.name}</p>
+                    <p className="text-xs text-ink-subtle">
                       {row.roomNo ? `Room ${row.roomNo}` : row.code}
                       {row.daysOverdue > 0 ? ` · ${row.daysOverdue}d overdue` : row.daysOverdue < 0 ? '' : ' · due today'}
                     </p>
@@ -416,10 +431,10 @@ function PendingList({ rows, onPay }) {
                   <td className="px-3 py-3 text-right text-sm font-semibold whitespace-nowrap text-amber-600 tabular-nums">
                     {row.lightRemaining > 0 ? formatRupees(row.lightRemaining) : '—'}
                   </td>
-                  <td className="px-3 py-3 text-right text-sm font-bold whitespace-nowrap text-slate-900 tabular-nums">
+                  <td className="px-3 py-3 text-right text-sm font-bold whitespace-nowrap text-ink tabular-nums">
                     {formatRupees(row.totalRemaining)}
                   </td>
-                  <td className="px-3 py-3 text-xs whitespace-nowrap text-slate-500">{formatDate(row.dueDate)}</td>
+                  <td className="px-3 py-3 text-xs whitespace-nowrap text-ink-subtle">{formatDate(row.dueDate)}</td>
                   <td className="px-3 py-3 text-right print:hidden">
                     <div className="flex items-center justify-end gap-2">
                       <ReminderButton

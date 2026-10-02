@@ -9,7 +9,12 @@ import ImagePicker from '../components/ImagePicker.jsx';
 import ImageViewer from '../components/ImageViewer.jsx';
 import PaymentDialog from '../components/PaymentDialog.jsx';
 import LightBillDialog from '../components/LightBillDialog.jsx';
+import AgreementDialog from '../components/AgreementDialog.jsx';
+import UpiQr from '../components/UpiQr.jsx';
+import ReminderTemplatesDialog from '../components/ReminderTemplatesDialog.jsx';
+import LateFeeDialog from '../components/LateFeeDialog.jsx';
 import { ConfirmDialog } from '../components/Modal.jsx';
+import { NoticeDialog, MoveDialog, VacateDialog, RoomHistoryDialog } from '../components/TenantDialogs.jsx';
 import { TextField, Textarea, SelectField } from '../components/FormFields.jsx';
 import { AmountField } from '../components/AmountField.jsx';
 import { EmptyState, Spinner } from '../components/States.jsx';
@@ -22,6 +27,12 @@ import {
   PhoneIcon,
   IdCardIcon,
   UserPlusIcon,
+  MoveIcon,
+  CheckoutIcon,
+  BuildingIcon,
+  FileTextIcon,
+  ClockIcon,
+  MessageIcon,
 } from '../components/icons.jsx';
 import { useData } from '../context/DataContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
@@ -30,16 +41,22 @@ import { customerEditSchema, PROOF_TYPES, sanitiseAadhaar, sanitisePan, sanitise
 import { formatCurrency, formatRupees, formatDate, getAge } from '../utils/format.js';
 import { todayISO, toDateInput, dayjs } from '../utils/dateLogic.js';
 import { getRemaining, getPaidPercent, TX_LIGHT_BILL } from '../utils/ledger.js';
-import { SHARING_TYPES } from '../services/index.js';
+import { SHARING_TYPES, roomService } from '../services/index.js';
 
 const MODE_LABEL = { cash: 'Cash', upi: 'UPI', bank: 'Bank transfer' };
 
+const TENANT_STATUS_LABELS = {
+  active: 'Active',
+  notice: 'Leaving soon',
+  vacated: 'Vacated',
+};
+
 function DetailRow({ label, value, mono = false }) {
   return (
-    <div className="flex items-start justify-between gap-4 border-b border-slate-100 py-2.5 last:border-0">
-      <dt className="shrink-0 text-sm text-slate-500">{label}</dt>
-      <dd className={`text-right text-sm font-medium break-words text-slate-800 ${mono ? 'tabular-nums' : ''}`}>
-        {value || <span className="text-slate-400">—</span>}
+    <div className="flex items-start justify-between gap-4 border-b border-line py-2.5 last:border-0">
+      <dt className="shrink-0 text-sm text-ink-subtle">{label}</dt>
+      <dd className={`text-right text-sm font-medium break-words text-ink ${mono ? 'tabular-nums' : ''}`}>
+        {value || <span className="text-ink-subtle">—</span>}
       </dd>
     </div>
   );
@@ -55,12 +72,12 @@ function ProofThumbnail({ customer, onOpen }) {
       onClick={onOpen}
       disabled={!customer.proofImageId}
       className={`group relative flex aspect-4/3 w-full items-center justify-center overflow-hidden rounded-xl border
-                  border-slate-200 bg-slate-50 transition ${
+                  border-line bg-sunken transition ${
                     customer.proofImageId ? 'cursor-zoom-in hover:border-brand-400' : 'cursor-default'
                   }`}
     >
       {loading ? (
-        <Spinner className="size-5 text-slate-400" />
+        <Spinner className="size-5 text-ink-subtle" />
       ) : url ? (
         <>
           <img src={url} alt={`${label} for ${customer.name}`} className="size-full object-cover" />
@@ -71,7 +88,7 @@ function ProofThumbnail({ customer, onOpen }) {
       ) : (
         <div className="flex flex-col items-center gap-1.5 p-4 text-center">
           <IdCardIcon className="size-6 text-slate-300" />
-          <span className="text-xs text-slate-400">No {label} uploaded</span>
+          <span className="text-xs text-ink-subtle">No {label} uploaded</span>
         </div>
       )}
     </button>
@@ -298,7 +315,7 @@ function EditForm({ customer, onCancel, onSaved }) {
         />
       </div>
 
-      <div className="flex flex-col-reverse gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:justify-end">
+      <div className="flex flex-col-reverse gap-2 border-t border-line pt-4 sm:flex-row sm:justify-end">
         <button type="button" className="btn-secondary" onClick={onCancel} disabled={saving}>
           Cancel
         </button>
@@ -327,6 +344,7 @@ export default function CustomerDetails() {
     recordLightBillPayment,
     saveLightBill,
     deleteTransaction,
+    refresh,
   } = useData();
 
   const [editing, setEditing] = useState(false);
@@ -337,12 +355,35 @@ export default function CustomerDetails() {
   const [existingBill, setExistingBill] = useState(null);
   const [deletingTx, setDeletingTx] = useState(null);
   const [saving, setSaving] = useState(false);
-
+  const [noticeOpen, setNoticeOpen] = useState(false);
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [vacateOpen, setVacateOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [agreementOpen, setAgreementOpen] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [lateFeeOpen, setLateFeeOpen] = useState(false);
+  const [rooms, setRooms] = useState([]);
   const customer = useMemo(() => customers.find((c) => c.id === id) ?? null, [customers, id]);
 
   useEffect(() => {
     setEditing(false);
   }, [id]);
+
+  // Room numbers for labels; the move/history dialogs need the list, not just ids.
+  useEffect(() => {
+    let cancelled = false;
+    roomService
+      .listRooms()
+      .then((list) => {
+        if (!cancelled) setRooms(list);
+      })
+      .catch(() => {
+        if (!cancelled) setRooms([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const cycle = openCycleByCustomer.get(id) ?? null;
   const rentRemaining = getRemaining(cycle);
@@ -437,11 +478,27 @@ export default function CustomerDetails() {
 
   async function handleDeleteTx() {
     if (!deletingTx) return;
+    const tx = deletingTx;
     setSaving(true);
     try {
-      await deleteTransaction(deletingTx.id);
-      toast.success('Transaction deleted and balances restored.');
+      await deleteTransaction(tx.id);
       setDeletingTx(null);
+      await refresh();
+      // Genuine undo: a deleted payment is restored by re-recording it with
+      // the same amount, date and mode - the ledger maths put the balances
+      // back exactly where they were.
+      await toast.withUndo(
+        async () => {},
+        async () => {
+          if (tx.type === TX_LIGHT_BILL && tx.billId) {
+            await recordLightBillPayment({ customerId: tx.customerId, billId: tx.billId, amount: tx.amount, date: tx.date, mode: tx.mode, note: tx.note });
+          } else {
+            await recordRentPayment({ customerId: tx.customerId, amount: tx.amount, date: tx.date, mode: tx.mode, note: tx.note });
+          }
+          await refresh();
+        },
+        { pendingMessage: 'Transaction deleted. Undo?', undoneMessage: 'Payment restored.' },
+      );
     } catch (error) {
       toast.error(error.message || 'Could not delete that transaction.');
     } finally {
@@ -492,8 +549,8 @@ export default function CustomerDetails() {
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div className="min-w-0">
-                <h1 className="truncate text-xl font-bold text-slate-900">{customer.name}</h1>
-                <p className="mt-0.5 text-sm text-slate-500">
+                <h1 className="truncate text-xl font-bold text-ink">{customer.name}</h1>
+                <p className="mt-0.5 text-sm text-ink-subtle">
                   {customer.code} · {customer.sharingType} sharing · {getAge(customer.joiningDate)} at PG
                 </p>
               </div>
@@ -506,6 +563,14 @@ export default function CustomerDetails() {
                 Call
               </a>
               <ReminderButton customer={customer} remaining={rentRemaining} className="btn-secondary min-h-10 px-3 text-xs" label="Send reminder" />
+              <button
+                type="button"
+                onClick={() => setTemplatesOpen(true)}
+                className="btn-secondary min-h-10 px-3 text-xs"
+              >
+                <MessageIcon className="size-4" />
+                Templates
+              </button>
               <button
                 type="button"
                 onClick={() => setPayTarget({ kind: 'rent', customer, cycle })}
@@ -525,29 +590,50 @@ export default function CustomerDetails() {
                 <BoltIcon className="size-4" />
                 {bills.some((b) => b.month === currentMonthKey(today)) ? 'Edit this month bill' : 'Add light bill'}
               </button>
+              {overdue && cycle && (
+                <button
+                  type="button"
+                  onClick={() => setLateFeeOpen(true)}
+                  className="btn-secondary min-h-10 px-3 text-xs"
+                >
+                  <ClockIcon className="size-4" />
+                  Late fee
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setAgreementOpen(true)}
+                className="btn-secondary min-h-10 px-3 text-xs"
+              >
+                <FileTextIcon className="size-4" />
+                Agreement
+              </button>
             </div>
+
+            {/* Scannable UPI QR for the exact outstanding balance. */}
+            {customer.status !== 'vacated' && <UpiQr customer={customer} remaining={rentRemaining} compact />}
           </div>
         </div>
 
         {/* The sharing card / balance strip the tenant cares about. */}
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <div className="rounded-xl bg-slate-50 p-3">
-            <p className="text-[11px] text-slate-500">Monthly rent</p>
-            <p className="mt-0.5 text-sm font-bold text-slate-900">{formatCurrency(customer.rentAmount)}</p>
+          <div className="rounded-xl bg-sunken p-3">
+            <p className="text-[11px] text-ink-subtle">Monthly rent</p>
+            <p className="mt-0.5 text-sm font-bold text-ink">{formatCurrency(customer.rentAmount)}</p>
           </div>
-          <div className="rounded-xl bg-slate-50 p-3">
-            <p className="text-[11px] text-slate-500">Next rent due</p>
-            <p className="mt-0.5 text-sm font-bold text-slate-900">{formatDate(customer.nextDueDate)}</p>
+          <div className="rounded-xl bg-sunken p-3">
+            <p className="text-[11px] text-ink-subtle">Next rent due</p>
+            <p className="mt-0.5 text-sm font-bold text-ink">{formatDate(customer.nextDueDate)}</p>
           </div>
           <div className={`rounded-xl p-3 ${rentRemaining > 0 ? 'bg-red-50' : 'bg-emerald-50'}`}>
-            <p className="text-[11px] text-slate-500">Balance on sharing card</p>
+            <p className="text-[11px] text-ink-subtle">Balance on sharing card</p>
             <p className={`mt-0.5 text-sm font-bold ${rentRemaining > 0 ? 'text-red-700' : 'text-emerald-700'}`}>
               {formatRupees(rentRemaining)}
             </p>
           </div>
-          <div className="rounded-xl bg-slate-50 p-3">
-            <p className="text-[11px] text-slate-500">Deposit</p>
-            <p className="mt-0.5 text-sm font-bold text-slate-900">
+          <div className="rounded-xl bg-sunken p-3">
+            <p className="text-[11px] text-ink-subtle">Deposit</p>
+            <p className="mt-0.5 text-sm font-bold text-ink">
               {formatCurrency(customer.depositAmount)}
               {customer.depositPaid ? ' ✓' : ''}
             </p>
@@ -566,7 +652,7 @@ export default function CustomerDetails() {
               Electricity due {formatRupees(lightRemaining)}
             </span>
           )}
-          <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+          <span className="inline-flex items-center rounded-full bg-sunken px-2.5 py-1 text-xs font-semibold text-ink-muted">
             {formatRupees(totalReceived)} received all-time
           </span>
         </div>
@@ -581,14 +667,14 @@ export default function CustomerDetails() {
 
       {editing ? (
         <div className="card p-4 sm:p-5">
-          <h2 className="mb-4 text-sm font-semibold text-slate-900">Edit tenant</h2>
+          <h2 className="mb-4 text-sm font-semibold text-ink">Edit tenant</h2>
           <EditForm customer={customer} onCancel={() => setEditing(false)} onSaved={() => setEditing(false)} />
         </div>
       ) : (
         <div className="grid gap-4 lg:grid-cols-3">
           {/* ---------------------------------------------------- details */}
           <div className="card p-4 sm:p-5 lg:col-span-2">
-            <h2 className="mb-2 text-sm font-semibold text-slate-900">Tenant details</h2>
+            <h2 className="mb-2 text-sm font-semibold text-ink">Tenant details</h2>
             <dl>
               <DetailRow label="Mobile" value={customer.mobile} mono />
               <DetailRow label="Email" value={customer.email} />
@@ -599,25 +685,69 @@ export default function CustomerDetails() {
               <DetailRow label="Joining date" value={formatDate(customer.joiningDate)} />
               <DetailRow label="Room / Bed" value={[customer.roomNo, customer.bedNo].filter(Boolean).join(' - ')} />
               <DetailRow label="Sharing type" value={`${customer.sharingType} sharing`} />
-              <DetailRow label="Status" value={customer.status === 'active' ? 'Active' : 'Inactive'} />
+              <DetailRow label="Status" value={TENANT_STATUS_LABELS[customer.status] ?? customer.status} />
+              {customer.status === 'notice' && (
+                <DetailRow label="Expected leaving" value={formatDate(customer.expectedLeavingDate)} />
+              )}
+              {customer.vacatedAt && (
+                <DetailRow label="Checked out" value={formatDate(customer.vacatedAt)} />
+              )}
+              {Number(customer.damageCharges) > 0 && (
+                <DetailRow label="Damage charges" value={formatRupees(customer.damageCharges)} />
+              )}
               <DetailRow label="Notes" value={customer.notes} />
             </dl>
 
-            <div className="mt-5 flex flex-col gap-2 sm:flex-row">
-              <button type="button" className="btn-secondary flex-1" onClick={() => setEditing(true)}>
-                <EditIcon className="size-4" />
-                Edit details
-              </button>
-              <button type="button" className="btn-ghost text-red-600 hover:bg-red-50 sm:flex-none" onClick={() => setConfirmDelete(true)}>
-                <TrashIcon className="size-4" />
-                Delete
-              </button>
-            </div>
+            {customer.status !== 'vacated' && (
+              <div className="mt-5 grid gap-2 sm:grid-cols-2">
+                <button type="button" className="btn-secondary" onClick={() => setEditing(true)}>
+                  <EditIcon className="size-4" />
+                  Edit details
+                </button>
+                <button type="button" className="btn-secondary" onClick={() => setMoveOpen(true)}>
+                  <MoveIcon className="size-4" />
+                  Move bed
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary sm:col-span-2"
+                  onClick={() => setHistoryOpen(true)}
+                >
+                  <BuildingIcon className="size-4" />
+                  Room history
+                </button>
+                {customer.status === 'notice' ? (
+                  <button type="button" className="btn-secondary" onClick={() => setNoticeOpen(true)}>
+                    Update notice
+                  </button>
+                ) : (
+                  <button type="button" className="btn-secondary" onClick={() => setNoticeOpen(true)}>
+                    Give notice
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn-secondary sm:col-span-2"
+                  onClick={() => setVacateOpen(true)}
+                >
+                  <CheckoutIcon className="size-4" />
+                  Checkout &amp; settle deposit
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost text-red-600 hover:bg-red-50 sm:col-span-2"
+                  onClick={() => setConfirmDelete(true)}
+                >
+                  <TrashIcon className="size-4" />
+                  Delete tenant
+                </button>
+              </div>
+            )}
           </div>
 
           {/* ------------------------------------------------------ proof */}
           <div className="card p-4 sm:p-5">
-            <h2 className="mb-3 text-sm font-semibold text-slate-900">Identity proof</h2>
+            <h2 className="mb-3 text-sm font-semibold text-ink">Identity proof</h2>
             <ProofThumbnail customer={customer} onOpen={() => setViewingImage(true)} />
             <dl className="mt-3">
               <DetailRow label="Type" value={customer.proofType === 'PAN' ? 'PAN card' : 'Aadhaar card'} />
@@ -633,11 +763,11 @@ export default function CustomerDetails() {
       {/* --------------------------------------------------- rent cycle history */}
       <div className="card p-4 sm:p-5">
         <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold text-slate-900">
+          <h2 className="text-sm font-semibold text-ink">
             Rent cycles
-            <span className="ml-1.5 font-normal text-slate-400">({cycleHistory.length})</span>
+            <span className="ml-1.5 font-normal text-ink-subtle">({cycleHistory.length})</span>
           </h2>
-          {cycle && <p className="text-xs text-slate-500">Next due {formatDate(customer.nextDueDate)}</p>}
+          {cycle && <p className="text-xs text-ink-subtle">Next due {formatDate(customer.nextDueDate)}</p>}
         </div>
 
         {cycleHistory.length === 0 ? (
@@ -656,8 +786,8 @@ export default function CustomerDetails() {
                   <div className="flex items-center gap-3">
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-baseline justify-between gap-1">
-                        <p className="text-sm font-semibold text-slate-900">
-                          {formatCurrency(c.rentAmount)} <span className="font-normal text-slate-400">· due {formatDate(c.dueDate)}</span>
+                        <p className="text-sm font-semibold text-ink">
+                          {formatCurrency(c.rentAmount)} <span className="font-normal text-ink-subtle">· due {formatDate(c.dueDate)}</span>
                         </p>
                         <span
                           className={`text-xs font-semibold ${
@@ -668,13 +798,13 @@ export default function CustomerDetails() {
                         </span>
                       </div>
                       <div className="mt-1.5 flex items-center gap-2">
-                        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100">
+                        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-sunken">
                           <div
-                            className={`h-full rounded-full ${percent >= 100 ? 'bg-emerald-500' : percent > 0 ? 'bg-amber-500' : 'bg-slate-200'}`}
+                            className={`h-full rounded-full ${percent >= 100 ? 'bg-emerald-500' : percent > 0 ? 'bg-amber-500' : 'bg-line-strong'}`}
                             style={{ width: `${Math.min(100, percent)}%` }}
                           />
                         </div>
-                        <span className="text-[11px] text-slate-400 tabular-nums">{percent}%</span>
+                        <span className="text-[11px] text-ink-subtle tabular-nums">{percent}%</span>
                       </div>
                     </div>
                     {getRemaining(c) > 0 && c.id === cycle?.id && (
@@ -697,9 +827,9 @@ export default function CustomerDetails() {
       {/* ---------------------------------------------------- light bill history */}
       <div className="card p-4 sm:p-5">
         <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold text-slate-900">
+          <h2 className="text-sm font-semibold text-ink">
             Light bills
-            <span className="ml-1.5 font-normal text-slate-400">({bills.length})</span>
+            <span className="ml-1.5 font-normal text-ink-subtle">({bills.length})</span>
           </h2>
           <button
             type="button"
@@ -743,8 +873,8 @@ export default function CustomerDetails() {
                     <BoltIcon className="size-5" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-slate-900">{formatBillMonth(bill.month)} · {formatRupees(bill.billAmount)}</p>
-                    <p className="truncate text-xs text-slate-500">
+                    <p className="text-sm font-semibold text-ink">{formatBillMonth(bill.month)} · {formatRupees(bill.billAmount)}</p>
+                    <p className="truncate text-xs text-ink-subtle">
                       {bill.units != null ? `${bill.units} units` : ''}
                       {bill.ratePerUnit != null ? ` x Rs ${bill.ratePerUnit}` : ''}
                       {bill.note ? ` · ${bill.note}` : ''}
@@ -766,7 +896,7 @@ export default function CustomerDetails() {
                       setExistingBill(bill);
                       setBillOpen(true);
                     }}
-                    className="flex size-10 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+                    className="flex size-10 shrink-0 items-center justify-center rounded-lg text-ink-subtle transition hover:bg-sunken hover:text-ink-muted"
                     aria-label={`Edit ${formatBillMonth(bill.month)} bill`}
                   >
                     <EditIcon className="size-4" />
@@ -781,11 +911,11 @@ export default function CustomerDetails() {
       {/* ------------------------------------------------- payment history */}
       <div className="card p-4 sm:p-5">
         <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold text-slate-900">
+          <h2 className="text-sm font-semibold text-ink">
             Payment history
-            <span className="ml-1.5 font-normal text-slate-400">({customerTx.length})</span>
+            <span className="ml-1.5 font-normal text-ink-subtle">({customerTx.length})</span>
           </h2>
-          <p className="text-xs text-slate-500">{formatRupees(totalReceived)} received in total</p>
+          <p className="text-xs text-ink-subtle">{formatRupees(totalReceived)} received in total</p>
         </div>
 
         {customerTx.length === 0 ? (
@@ -802,8 +932,8 @@ export default function CustomerDetails() {
                   <CheckIcon className="size-5" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-slate-900">{formatCurrency(payment.amount)}</p>
-                  <p className="truncate text-xs text-slate-500">
+                  <p className="text-sm font-semibold text-ink">{formatCurrency(payment.amount)}</p>
+                  <p className="truncate text-xs text-ink-subtle">
                     {formatDate(payment.date)} · {MODE_LABEL[payment.mode] ?? payment.mode} ·{' '}
                     {payment.type === TX_LIGHT_BILL ? 'Light bill' : 'Rent'}
                     {payment.note ? ` · ${payment.note}` : ''}
@@ -812,7 +942,7 @@ export default function CustomerDetails() {
                 <button
                   type="button"
                   onClick={() => setDeletingTx(payment)}
-                  className="flex size-10 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                  className="flex size-10 shrink-0 items-center justify-center rounded-lg text-ink-subtle transition hover:bg-red-50 hover:text-red-600"
                   aria-label={`Delete payment of ${formatCurrency(payment.amount)} on ${formatDate(payment.date)}`}
                 >
                   <TrashIcon className="size-4" />
@@ -831,6 +961,36 @@ export default function CustomerDetails() {
         title={`${customer.proofType === 'PAN' ? 'PAN' : 'Aadhaar'} · ${customer.name}`}
       />
 
+      <RoomHistoryDialog
+        open={historyOpen}
+        customer={customer}
+        rooms={rooms}
+        onClose={() => setHistoryOpen(false)}
+      />
+
+      <NoticeDialog
+        open={noticeOpen}
+        customer={customer}
+        onClose={() => setNoticeOpen(false)}
+        onDone={refresh}
+      />
+
+      <MoveDialog
+        open={moveOpen}
+        customer={customer}
+        onClose={() => setMoveOpen(false)}
+        onDone={refresh}
+      />
+
+      <VacateDialog
+        open={vacateOpen}
+        customer={customer}
+        pendingRent={rentRemaining}
+        pendingBill={lightRemaining}
+        onClose={() => setVacateOpen(false)}
+        onDone={refresh}
+      />
+
       <PaymentDialog
         open={Boolean(payTarget)}
         target={payTarget}
@@ -846,6 +1006,21 @@ export default function CustomerDetails() {
         onClose={() => setBillOpen(false)}
         onSave={handleSaveBill}
         busy={saving}
+      />
+
+      <AgreementDialog open={agreementOpen} customer={customer} onClose={() => setAgreementOpen(false)} />
+
+      <ReminderTemplatesDialog
+        open={templatesOpen}
+        customer={customer}
+        onClose={() => setTemplatesOpen(false)}
+      />
+
+      <LateFeeDialog
+        open={lateFeeOpen}
+        customer={customer}
+        cycle={cycle}
+        onClose={() => setLateFeeOpen(false)}
       />
 
       <ConfirmDialog

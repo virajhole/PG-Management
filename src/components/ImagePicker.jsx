@@ -56,14 +56,14 @@ export default function ImagePicker({
       <div className="flex flex-wrap items-start gap-4">
         <div
           className={`flex size-24 shrink-0 items-center justify-center overflow-hidden rounded-2xl border
-                      border-dashed bg-slate-50 ${value ? 'border-brand-300' : 'border-slate-300'}`}
+                      border-dashed bg-sunken ${value ? 'border-brand-300' : 'border-line-strong'}`}
         >
           {busy ? (
             <Spinner className="size-6 text-brand-600" />
           ) : value ? (
             <img src={value} alt={`${label} preview`} className="size-full object-cover" />
           ) : (
-            <Icon className="size-7 text-slate-400" />
+            <Icon className="size-7 text-ink-subtle" />
           )}
         </div>
 

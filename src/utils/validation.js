@@ -106,6 +106,9 @@ const baseShape = {
     .max(1_000_000, 'That rent amount looks too high'),
   roomNo: optionalText(20),
   bedNo: optionalText(20),
+  // Kept in the schema so the resolver's parsed values carry it through: the
+  // submit handler needs the picked room id, and zod strips unknown keys.
+  roomId: z.string().optional(),
   depositAmount: z.coerce
     .number({ invalid_type_error: 'Deposit amount is required' })
     .min(0, 'Deposit cannot be negative')

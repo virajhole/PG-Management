@@ -13,7 +13,7 @@ const AmountField = forwardRef(function AmountField(
       </label>
       <div className="relative">
         {prefix && (
-          <span className="pointer-events-none absolute inset-y-0 left-3.5 flex items-center text-sm font-medium text-slate-400">
+          <span className="pointer-events-none absolute inset-y-0 left-3.5 flex items-center text-sm font-medium text-ink-subtle">
             {prefix}
           </span>
         )}

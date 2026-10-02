@@ -155,7 +155,7 @@ export default function LightBillDialog({ open, customer, existingBill, onClose,
 
         <div>
           <label className="field-label" htmlFor="bill-note">
-            Note <span className="font-normal text-slate-400">(optional)</span>
+            Note <span className="font-normal text-ink-subtle">(optional)</span>
           </label>
           <input
             id="bill-note"

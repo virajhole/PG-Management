@@ -1,6 +1,7 @@
-import { createCustomer, normalizeCustomer } from './customerService.js';
+import { createCustomer, normalizeCustomer, getCustomer } from './customerService.js';
 import { ensureOpenCycle } from './cycleService.js';
 import { recordRentPayment, saveLightBill, recordLightBillPayment } from './transactionService.js';
+import * as roomService from './roomService.js';
 import { dayjs } from '../utils/dateLogic.js';
 import { DEFAULT_SETTINGS } from './settingsService.js';
 
@@ -42,7 +43,7 @@ export function buildSampleCustomers() {
       sharingType: 2,
       rentAmount: DEFAULT_SETTINGS.sharingPrices[2],
       roomNo: '204',
-      bedNo: 'A',
+      bedNo: 1,
       depositAmount: 5000,
       notes: 'Requested a top bunk. Vegetarian.',
     }),
@@ -75,7 +76,7 @@ export function buildSampleCustomers() {
       sharingType: 3,
       rentAmount: DEFAULT_SETTINGS.sharingPrices[3],
       roomNo: '310',
-      bedNo: 'C',
+      bedNo: 3,
       depositAmount: 5000,
     }),
     buildCustomer(20, {
@@ -90,7 +91,7 @@ export function buildSampleCustomers() {
       sharingType: 4,
       rentAmount: DEFAULT_SETTINGS.sharingPrices[4],
       roomNo: '405',
-      bedNo: 'D',
+      bedNo: 4,
       depositAmount: 5000,
     }),
     buildCustomer(0, {
@@ -105,7 +106,7 @@ export function buildSampleCustomers() {
       sharingType: 5,
       rentAmount: DEFAULT_SETTINGS.sharingPrices[5],
       roomNo: '502',
-      bedNo: 'B',
+      bedNo: 2,
       depositAmount: 5000,
       notes: 'Joining today - first rent due today.',
     }),
@@ -121,12 +122,38 @@ export function buildSampleCustomers() {
       sharingType: 2,
       rentAmount: DEFAULT_SETTINGS.sharingPrices[2],
       roomNo: '207',
-      bedNo: 'B',
+      bedNo: 2,
       depositAmount: 5000,
     }),
   ];
 
   return samples;
+}
+
+/**
+ * Rooms the samples above live in, across three floors, with enough spare beds
+ * that the admission picker, the move dialog and the vacancy counters all have
+ * something to show. `monthlyRent: null` on most rooms means "use the Settings
+ * price", which is the common case; one room carries an override to prove the
+ * two can coexist.
+ */
+export function buildSampleRooms() {
+  return [
+    // Ground floor
+    { floor: 0, roomNo: '101', sharingType: 1, hasAc: true, hasAttachedBathroom: true, notes: 'Single room, corner.' },
+    { floor: 0, roomNo: '102', sharingType: 2, hasAc: false, hasAttachedBathroom: true },
+    { floor: 0, roomNo: '103', sharingType: 3, hasAc: false, hasAttachedBathroom: true, notes: 'Spare triple, north side.' },
+    // First floor
+    { floor: 1, roomNo: '204', sharingType: 2, hasAc: true, hasAttachedBathroom: true },
+    { floor: 1, roomNo: '205', sharingType: 3, hasAc: true, hasAttachedBathroom: false, notes: 'Common bathroom on the floor.' },
+    // Rent override: this room is cheaper than the 3-sharing default.
+    { floor: 1, roomNo: '207', sharingType: 2, monthlyRent: 9000, hasAc: true, hasAttachedBathroom: true, notes: 'Discounted - near the lift.' },
+    // Second floor
+    { floor: 2, roomNo: '310', sharingType: 3, hasAc: true, hasAttachedBathroom: true },
+    { floor: 2, roomNo: '405', sharingType: 4, hasAc: true, hasAttachedBathroom: true },
+    { floor: 2, roomNo: '502', sharingType: 5, hasAc: true, hasAttachedBathroom: true, notes: 'Full occupancy room.' },
+    { floor: 2, roomNo: '503', sharingType: 5, hasAc: false, hasAttachedBathroom: true, notes: 'Under maintenance - do not allocate.' },
+  ].map((room) => ({ hasAc: false, hasAttachedBathroom: false, monthlyRent: null, isActive: true, ...room }));
 }
 
 /**
@@ -145,6 +172,15 @@ export async function seedSampleData() {
   const samples = buildSampleCustomers();
   const created = [];
 
+  // Rooms first: admission assigns a bed through the same locked RPC the real
+  // form uses, so the seeded occupancy is genuinely consistent with the ledger
+  // rather than just room numbers typed into a text field.
+  const rooms = [];
+  for (const room of buildSampleRooms()) {
+    rooms.push(await roomService.createRoom(room));
+  }
+  const roomByNo = new Map(rooms.map((room) => [room.roomNo, room]));
+
   for (const sample of samples) {
     const { id, code, createdAt, updatedAt, payments, ...rest } = sample;
     void id;
@@ -152,12 +188,22 @@ export async function seedSampleData() {
     void createdAt;
     void updatedAt;
     void payments;
-    const record = await createCustomer(rest);
-    await ensureOpenCycle(record);
-    created.push(record);
+
+    const room = roomByNo.get(rest.roomNo);
+    let customer;
+    if (room) {
+      // The RPC returns the new id, so read the record back to get the stored
+      // row (generated code, server-side rent, status).
+      const { customerId } = await roomService.admitCustomer(rest, room.id, rest.bedNo);
+      customer = await getCustomer(customerId);
+    } else {
+      customer = await createCustomer(rest);
+    }
+    await ensureOpenCycle(customer);
+    created.push(customer);
   }
 
-  const [rahul, priya, aman, , imran, deepak] = created;
+  const [rahul, priya, aman, sneha, imran, deepak] = created;
   const today = dayjs().startOf('day');
   const startOfMonth = today.startOf('month');
 
@@ -236,6 +282,15 @@ export async function seedSampleData() {
     mode: 'bank',
     note: 'Paid in full',
   });
+
+  // Sneha has given notice, leaving in two weeks. She still holds bed 4 in room
+  // 405, so the occupancy counters must keep counting her until she checks out.
+  // Without this the seeded "leaving soon" panel on the dashboard is empty.
+  await roomService.giveNotice(
+    sneha.id,
+    today.add(14, 'day').format('YYYY-MM-DD'),
+    'Moving to a hostel nearer college.',
+  );
 
   return created;
 }

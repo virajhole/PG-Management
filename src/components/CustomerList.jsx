@@ -30,14 +30,14 @@ function FilterChip({ active, onClick, children, count }) {
       className={`chip ${
         active
           ? 'border-brand-600 bg-brand-600 text-white'
-          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
+          : 'border-line bg-raised text-ink-muted hover:border-line-strong hover:bg-sunken'
       }`}
     >
       {children}
       {count !== undefined && (
         <span
           className={`ml-0.5 rounded-full px-1.5 text-[11px] font-semibold ${
-            active ? 'bg-white/20' : 'bg-slate-100 text-slate-500'
+            active ? 'bg-raised/20' : 'bg-sunken text-ink-subtle'
           }`}
         >
           {count}
@@ -55,7 +55,7 @@ function RecordPaymentButton({ onClick }) {
         event.stopPropagation();
         onClick();
       }}
-      className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-lg border border-emerald-300 bg-white
+      className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-lg border border-emerald-300 bg-raised
                  px-3 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-50 active:scale-[0.97]"
     >
       <CheckIcon className="size-4" />
@@ -72,8 +72,8 @@ function BillButton({ onClick }) {
         event.stopPropagation();
         onClick();
       }}
-      className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white
-                 px-3 text-xs font-semibold text-slate-600 transition hover:bg-amber-50 active:scale-[0.97]"
+      className="inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-lg border border-line bg-raised
+                 px-3 text-xs font-semibold text-ink-muted transition hover:bg-amber-50 active:scale-[0.97]"
       title="Add or edit a light bill"
     >
       <BoltIcon className="size-4" />
@@ -85,10 +85,10 @@ function BillButton({ onClick }) {
 /** Thin progress bar for how much of the open cycle has been paid. */
 function Progress({ cycle }) {
   const percent = getPaidPercent(cycle);
-  const tone = percent >= 100 ? 'bg-emerald-500' : percent > 0 ? 'bg-amber-500' : 'bg-slate-200';
+  const tone = percent >= 100 ? 'bg-emerald-500' : percent > 0 ? 'bg-amber-500' : 'bg-line-strong';
   return (
     <div
-      className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100"
+      className="h-1.5 w-full overflow-hidden rounded-full bg-sunken"
       role="progressbar"
       aria-valuenow={percent}
       aria-valuemin={0}
@@ -141,10 +141,10 @@ function CustomerCard({ customer, cycle, today, billTotal, onOpen, onPay, onBill
             <Avatar customer={customer} />
             <div className="min-w-0 flex-1">
               <div className="flex items-start justify-between gap-2">
-                <p className="truncate text-[15px] leading-tight font-semibold text-slate-900">{customer.name}</p>
+                <p className="truncate text-[15px] leading-tight font-semibold text-ink">{customer.name}</p>
                 <StatusBadge customer={customer} today={today} cycle={cycle} className="mt-0.5" />
               </div>
-              <p className="mt-1 truncate text-xs text-slate-500">
+              <p className="mt-1 truncate text-xs text-ink-subtle">
                 {customer.mobile} · {customer.sharingType} sharing
                 {customer.roomNo ? ` · Room ${customer.roomNo}` : ''}
               </p>
@@ -159,12 +159,12 @@ function CustomerCard({ customer, cycle, today, billTotal, onOpen, onPay, onBill
           <div className="mt-3 space-y-2 text-xs">
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <p className="text-slate-500">Monthly rent</p>
-                <p className="mt-0.5 text-sm font-semibold text-slate-800">{formatCurrency(customer.rentAmount)}</p>
+                <p className="text-ink-subtle">Monthly rent</p>
+                <p className="mt-0.5 text-sm font-semibold text-ink">{formatCurrency(customer.rentAmount)}</p>
               </div>
               <div>
-                <p className="text-slate-500">Next due</p>
-                <p className="mt-0.5 text-sm font-semibold text-slate-800">{formatDate(customer.nextDueDate)}</p>
+                <p className="text-ink-subtle">Next due</p>
+                <p className="mt-0.5 text-sm font-semibold text-ink">{formatDate(customer.nextDueDate)}</p>
               </div>
             </div>
             <Progress cycle={cycle} />
@@ -192,8 +192,8 @@ function CustomerRow({ customer, cycle, billTotal, today, onOpen, onPay, onBill 
         <div className="flex items-center gap-3">
           <Avatar customer={customer} size="sm" />
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-slate-900">{customer.name}</p>
-            <p className="truncate text-xs text-slate-500">{customer.code}</p>
+            <p className="truncate text-sm font-semibold text-ink">{customer.name}</p>
+            <p className="truncate text-xs text-ink-subtle">{customer.code}</p>
             <div className="mt-1 flex flex-wrap gap-1.5">
               <AdvanceBadge amount={customer.advanceCredit} />
               <BillBadge remainingBills={billTotal} />
@@ -201,21 +201,21 @@ function CustomerRow({ customer, cycle, billTotal, today, onOpen, onPay, onBill 
           </div>
         </div>
       </td>
-      <td className="px-3 py-3 text-sm whitespace-nowrap text-slate-700">{customer.mobile}</td>
-      <td className="px-3 py-3 text-sm whitespace-nowrap text-slate-700">{customer.sharingType} sharing</td>
-      <td className="px-3 py-3 text-sm whitespace-nowrap text-slate-700">
-        {customer.roomNo || <span className="text-slate-400">—</span>}
+      <td className="px-3 py-3 text-sm whitespace-nowrap text-ink">{customer.mobile}</td>
+      <td className="px-3 py-3 text-sm whitespace-nowrap text-ink">{customer.sharingType} sharing</td>
+      <td className="px-3 py-3 text-sm whitespace-nowrap text-ink">
+        {customer.roomNo || <span className="text-ink-subtle">—</span>}
       </td>
       <td className="px-3 py-3">
         <div className="min-w-24">
-          <p className="text-sm font-semibold whitespace-nowrap text-slate-900">{formatCurrency(customer.rentAmount)}</p>
+          <p className="text-sm font-semibold whitespace-nowrap text-ink">{formatCurrency(customer.rentAmount)}</p>
           <div className="mt-1.5">
             <Progress cycle={cycle} />
           </div>
           <BalanceBadge cycle={cycle} />
         </div>
       </td>
-      <td className="px-3 py-3 text-sm whitespace-nowrap text-slate-700">{formatDate(customer.nextDueDate)}</td>
+      <td className="px-3 py-3 text-sm whitespace-nowrap text-ink">{formatDate(customer.nextDueDate)}</td>
       <td className="px-3 py-3">
         <StatusBadge customer={customer} today={today} cycle={cycle} />
       </td>
@@ -346,7 +346,7 @@ export default function CustomerList({ customers, emptyAction }) {
       {/* ---------------------------------------------------------- search */}
       <div className="space-y-3">
         <div className="relative">
-          <SearchIcon className="pointer-events-none absolute top-1/2 left-3.5 size-4.5 -translate-y-1/2 text-slate-400" />
+          <SearchIcon className="pointer-events-none absolute top-1/2 left-3.5 size-4.5 -translate-y-1/2 text-ink-subtle" />
           <input
             type="search"
             value={query}
@@ -419,7 +419,7 @@ export default function CustomerList({ customers, emptyAction }) {
           <div className="card hidden overflow-hidden lg:block" data-testid="customer-table">
             <div className="scroll-slim max-h-[calc(100dvh-19rem)] overflow-auto">
               <table className="w-full border-collapse text-left">
-                <thead className="sticky top-0 z-10 bg-slate-50 text-xs tracking-wide text-slate-500 uppercase">
+                <thead className="sticky top-0 z-10 bg-sunken text-xs tracking-wide text-ink-subtle uppercase">
                   <tr>
                     <th className="px-4 py-3 font-semibold">Tenant</th>
                     <th className="px-3 py-3 font-semibold">Mobile</th>

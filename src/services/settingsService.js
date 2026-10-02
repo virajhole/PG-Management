@@ -64,6 +64,17 @@ export const DEFAULT_SETTINGS = {
   ownerName: 'PG Manager',
   ownerMobile: '',
   currencyNote: '',
+  // UPI deep links / QR codes (receipts + reminders).
+  upiId: '',
+  // Late fee: 'none' | 'fixed' (₹/day) | 'percent' (% of balance/day), applied
+  // after the grace period, optionally capped. The admin confirms each fee.
+  lateFeeMode: 'none',
+  lateFeeValue: 0,
+  lateFeeGraceDays: 0,
+  lateFeeMax: null,
+  // Mess (optional).
+  messEnabled: false,
+  messCharges: 0,
 };
 
 export async function loadSettings() {
@@ -74,6 +85,8 @@ export async function loadSettings() {
       ...DEFAULT_SETTINGS,
       ...stored,
       sharingPrices: { ...DEFAULT_SETTINGS.sharingPrices, ...(stored.sharingPrices || {}) },
+      lateFeeMax: stored.lateFeeMax ?? null,
+      messEnabled: Boolean(stored.messEnabled),
     };
   } catch {
     return { ...DEFAULT_SETTINGS };

@@ -297,10 +297,10 @@ describe('summarise', () => {
       { name: 'A', nextDueDate: '2024-05-05', rentAmount: 13000, status: 'active', payments: [], dueDay: 10 },
       { name: 'B', nextDueDate: '2024-05-13', rentAmount: 15000, status: 'active', payments: [], dueDay: 10 },
       { name: 'C', nextDueDate: '2024-06-10', rentAmount: 10500, status: 'active', payments: [], dueDay: 10 },
-      { name: 'D', nextDueDate: '2024-05-01', rentAmount: 18000, status: 'inactive', payments: [], dueDay: 10 },
+      { name: 'D', nextDueDate: '2024-05-01', rentAmount: 18000, status: 'vacated', payments: [], dueDay: 10 },
     ];
     const s = summarise(list, TODAY);
-    expect(s.total).toBe(3); // inactive excluded
+    expect(s.total).toBe(3); // vacated excluded
     expect(s.overdue).toBe(1);
     expect(s.dueSoon).toBe(1);
     expect(s.ok).toBe(1);

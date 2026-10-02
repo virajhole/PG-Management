@@ -20,7 +20,7 @@ export default function Avatar({ customer, size = 'md', className = '' }) {
       <img
         src={url}
         alt={customer?.name ? `${customer.name} photo` : 'Customer photo'}
-        className={`${dimension} shrink-0 rounded-full border border-slate-200 bg-slate-100 object-cover ${className}`}
+        className={`${dimension} shrink-0 rounded-full border border-line bg-sunken object-cover ${className}`}
         loading="lazy"
       />
     );
