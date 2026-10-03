@@ -10,7 +10,7 @@ const SIZES = {
 
 /** Photo when available, otherwise a tinted initials bubble. */
 export default function Avatar({ customer, size = 'md', className = '' }) {
-  const imageId = customer?.photoId;
+  const imageId = customer?.photoPath;
   const { url, loading } = useImageUrl(imageId);
   const initials = getInitials(customer?.name);
   const dimension = SIZES[size] ?? SIZES.md;

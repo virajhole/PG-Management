@@ -9,8 +9,7 @@ import { EmptyState } from './States.jsx';
 import { SearchIcon, UsersIcon, CheckIcon, BoltIcon } from './icons.jsx';
 import { formatCurrency, formatRupees, formatDate } from '../utils/format.js';
 import { getRentStatus } from '../utils/dateLogic.js';
-import { getRemaining, getPaidPercent, monthKey } from '../utils/ledger.js';
-import { ensureOpenCycle } from '../services/cycleService.js';
+import { getRemaining, getPaidPercent, monthKey, toAmount } from '../utils/ledger.js';
 import { useData } from '../context/DataContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
 
@@ -18,6 +17,7 @@ const FILTERS = [
   { key: 'all', label: 'All' },
   { key: 'overdue', label: 'Overdue' },
   { key: 'soon', label: 'Due Soon' },
+  { key: 'partial', label: 'Partial' },
   { key: 'paid', label: 'Paid' },
 ];
 
@@ -193,7 +193,6 @@ function CustomerRow({ customer, cycle, billTotal, today, onOpen, onPay, onBill 
           <Avatar customer={customer} size="sm" />
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-ink">{customer.name}</p>
-            <p className="truncate text-xs text-ink-subtle">{customer.code}</p>
             <div className="mt-1 flex flex-wrap gap-1.5">
               <AdvanceBadge amount={customer.advanceCredit} />
               <BillBadge remainingBills={billTotal} />
@@ -256,14 +255,17 @@ export default function CustomerList({ customers, emptyAction }) {
   const counts = useMemo(() => {
     let overdue = 0;
     let soon = 0;
+    let partial = 0;
     let paid = 0;
     for (const customer of customers) {
       const cycle = openCycleByCustomer.get(customer.id) ?? null;
-      if (getRemaining(cycle) <= 0) paid += 1;
+      const remaining = getRemaining(cycle);
+      if (remaining <= 0) paid += 1;
+      else if (toAmount(cycle?.paidAmount) > 0) partial += 1;
       else if (getRentStatus(customer.nextDueDate, today) === 'overdue') overdue += 1;
       else if (getRentStatus(customer.nextDueDate, today) === 'soon') soon += 1;
     }
-    return { all: customers.length, overdue, soon, paid };
+    return { all: customers.length, overdue, soon, partial, paid };
   }, [customers, openCycleByCustomer, today]);
 
   const filtered = useMemo(() => {
@@ -273,22 +275,21 @@ export default function CustomerList({ customers, emptyAction }) {
       const remaining = getRemaining(cycle);
       const bucket = getRentStatus(customer.nextDueDate, today);
       if (filter === 'paid' && remaining > 0) return false;
-      if (filter === 'overdue' && bucket !== 'overdue') return false;
-      if (filter === 'soon' && bucket !== 'soon') return false;
+      if (filter === 'partial' && !(remaining > 0 && toAmount(cycle?.paidAmount) > 0)) return false;
+      if (filter === 'overdue' && (remaining <= 0 || bucket !== 'overdue')) return false;
+      if (filter === 'soon' && (remaining <= 0 || bucket !== 'soon')) return false;
       if (!q) return true;
       return (
         customer.name.toLowerCase().includes(q) ||
         customer.mobile.includes(q) ||
-        (customer.roomNo || '').toLowerCase().includes(q) ||
-        (customer.code || '').toLowerCase().includes(q)
+        (customer.roomNo || '').toLowerCase().includes(q)
       );
     });
   }, [customers, filter, query, openCycleByCustomer, today]);
 
   async function openPay(customer) {
-    const cycle = openCycleByCustomer.get(customer.id) ?? (await ensureOpenCycle(customer));
     setActiveCustomer(customer);
-    setPaymentCycle(cycle);
+    setPaymentCycle(openCycleByCustomer.get(customer.id) ?? null);
     setScreen('record-payment');
   }
 
@@ -300,14 +301,14 @@ export default function CustomerList({ customers, emptyAction }) {
   async function confirmPayment(payment) {
     setSaving(true);
     try {
-      const result = await recordRentPayment({
+      await recordRentPayment({
         customerId: activeCustomer.id,
         amount: payment.amount,
         date: payment.date,
         mode: payment.mode,
         note: payment.note,
       });
-      toast.success(`Payment recorded. ${formatRupees(result.transaction.amount)} applied to rent.`);
+      toast.success(`Payment recorded. ${formatRupees(payment.amount)} applied to rent.`);
       setScreen('list');
       setActiveCustomer(null);
       setPaymentCycle(null);
@@ -322,7 +323,7 @@ export default function CustomerList({ customers, emptyAction }) {
     setSaving(true);
     try {
       const saved = await saveLightBill(bill);
-      toast.success(`Light bill ${formatRupees(saved.billAmount)} for ${saved.month} ${saved.id === bill.billId ? 'updated.' : 'added.'}`);
+      toast.success(`Light bill ${formatRupees(bill.billAmount)} for ${bill.month} ${bill.id ? 'updated.' : 'added.'}`);
       setScreen('list');
       setActiveCustomer(null);
     } catch (error) {

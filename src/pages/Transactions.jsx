@@ -9,7 +9,10 @@ import { useToast } from '../context/ToastContext.jsx';
 import { formatRupees, formatNumber, formatDate } from '../utils/format.js';
 import {
   filterTransactions,
+  getPendingList,
   getMonthTotal,
+  getTodayTotal,
+  getOutstandingTotals,
   toCsv,
   TX_RENT,
   TX_LIGHT_BILL,
@@ -62,7 +65,18 @@ function SummaryCard({ label, value, sub, icon: Icon, tone = 'slate' }) {
 }
 
 export default function TransactionsPage() {
-  const { customers, transactions, today, openCycleByCustomer, pendingList, deleteTransaction, recordRentPayment, settings } = useData();
+  const { customers, cycles, lightBills, transactions, today, openCycleByCustomer, deleteTransaction, recordRentPayment, settings } = useData();
+
+  // Everyone who still owes something, most overdue first.
+  const outstandingTotals = useMemo(
+    () => getOutstandingTotals({ cycles, lightBills }),
+    [cycles, lightBills],
+  );
+
+  const pendingList = useMemo(
+    () => getPendingList({ customers, cycles, lightBills, today }),
+    [customers, cycles, lightBills, today],
+  );
   const toast = useToast();
 
   const [month, setMonth] = useState(() => monthKey(today));
@@ -181,21 +195,20 @@ export default function TransactionsPage() {
       {/* -------------------------------------------------------- summaries */}
       <section aria-label="Summary" className="grid grid-cols-2 gap-3 xl:grid-cols-4">
         <SummaryCard
-          label={monthLabel}
-          value={formatRupees(monthStats.total)}
-          sub={`${monthStats.count} ${monthStats.count === 1 ? 'payment' : 'payments'}`}
+          label="Today's collection"
+          value={formatRupees(getTodayTotal(transactions, today).total)}
           icon={CheckCircleIcon}
           tone="brand"
         />
-        <SummaryCard label="Rent collected" value={formatRupees(monthStats.rent)} sub="this month" icon={BoltIcon} tone="slate" />
-        <SummaryCard label="Light bills collected" value={formatRupees(monthStats.lightBill)} sub="this month" icon={BoltIcon} tone="amber" />
         <SummaryCard
-          label="Shown"
-          value={range === 'all' ? formatRupees(totalShown) : `${formatNumber(visible.length)} rows`}
-          sub={range === 'all' ? `${visible.length} payments` : formatRupees(totalShown)}
-          icon={ClockIcon}
-          tone="slate"
+          label="Collected this month"
+          value={formatRupees(monthStats.total)}
+          sub={`${monthStats.count} ${monthStats.count === 1 ? 'payment' : 'payments'}`}
+          icon={BoltIcon}
+          tone="brand"
         />
+        <SummaryCard label="Remaining rent" value={formatRupees(outstandingTotals.rent)} icon={BoltIcon} tone={outstandingTotals.rent > 0 ? 'red' : 'slate'} />
+        <SummaryCard label="Remaining light bill" value={formatRupees(outstandingTotals.lightBill)} icon={BoltIcon} tone={outstandingTotals.lightBill > 0 ? 'amber' : 'slate'} />
       </section>
 
       {/* -------------------------------------------------------------- tabs */}

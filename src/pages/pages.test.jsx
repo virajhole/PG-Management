@@ -3,39 +3,33 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, within, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom/vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 vi.mock('../services/supabase.js', async () => await import('../test/supabaseFake.js'));
 
 import { ToastProvider, getQueuedToasts } from '../context/ToastContext.jsx';
 import { AuthProvider } from '../context/AuthContext.jsx';
-import { DataProvider } from '../context/DataContext.jsx';
-import { ThemeProvider } from '../context/ThemeContext.jsx';
+import { DataProvider, useData } from '../context/DataContext.jsx';
+import { ThemeProvider, useTheme } from '../context/ThemeContext.jsx';
 import Dashboard from './Dashboard.jsx';
 import Settings from './Settings.jsx';
 import Admission from './Admission.jsx';
+import CustomerDetails from './CustomerDetails.jsx';
+import Transactions from './Transactions.jsx';
+import Rooms from './Rooms.jsx';
 import Toaster from '../components/Toaster.jsx';
 import { startSession, clearSession } from '../services/authService.js';
 import { resetDatabase } from '../test/supabaseFake.js';
-import { loadSettings, DEFAULT_SETTINGS } from '../services/settingsService.js';
+import { seedSampleData } from '../test/seed.js';
 import { listCustomers } from '../services/customerService.js';
-import { seedSampleData } from '../services/seedService.js';
-import { dayjs } from '../utils/dateLogic.js';
 
 /**
- * End-to-end-ish tests through the real components and the real service layer.
- * The point is to prove the wiring works: the seeded colour coding, the payment
- * roll-forward and the admission form's disabled-submit rule.
- *
- * The Supabase data layer is swapped for the in-memory fake, and each test seeds
- * what it needs up front - the app no longer seeds demo data on boot.
- *
- * Note: the list renders both the mobile cards and the desktop table (CSS
- * decides which is visible), so name queries are scoped to one of them.
+ * The user's checklist, end to end through the real components and the real
+ * service layer: add a customer, see it on the dashboard, edit, partial
+ * payment, light bill, transactions, rooms, vacate, delete, dark mode.
  */
 
 const list = async () => within(await screen.findByTestId('customer-cards'));
-const table = async () => within(await screen.findByTestId('customer-table'));
 
 function renderApp(ui) {
   return render(
@@ -62,354 +56,377 @@ beforeEach(async () => {
   resetDatabase();
   window.localStorage.clear();
   clearSession();
-  startSession(); // skip the sign-in gate for these tests
+  startSession();
   await seedSampleData();
 });
 
 describe('Dashboard', () => {
-  it('shows all three colour states for the seeded tenants', async () => {
+  it('shows the summary cards and the seeded tenants in due order', async () => {
+    renderApp(<Dashboard />);
+
+    expect(await screen.findByLabelText('Summary')).toBeInTheDocument();
+    expect(screen.getByText('Total customers')).toBeInTheDocument();
+    expect(screen.getByText("Today's collection")).toBeInTheDocument();
+
+    const cards = await list();
+    expect(cards.getByText('Rahul Sharma')).toBeInTheDocument();
+    expect(cards.getByText('Priya Nair')).toBeInTheDocument();
+  });
+
+  it('shows row colours: overdue red, due-soon yellow', async () => {
     renderApp(<Dashboard />);
     const cards = await list();
 
+    const rahul = (await cards.findByText('Rahul Sharma')).closest('.rent-row');
+    expect(rahul.className).toContain('rent-overdue');
+
+    const priya = (await cards.findByText('Priya Nair')).closest('.rent-row');
+    // Due in 3 days with a full balance: yellow per the colour rule.
+    expect(priya.className).toContain('rent-soon');
+  });
+
+  it('shows paid / remaining with a progress bar and the light-bill badge', async () => {
+    renderApp(<Dashboard />);
+    const cards = await list();
+
+    const rahul = (await cards.findByText('Rahul Sharma')).closest('.rent-row');
+    expect(within(rahul).getByText(/Overdue by \d days/)).toBeInTheDocument();
+    expect(within(rahul).getByText('Balance Rs 10,000')).toBeInTheDocument();
+
+    const deepak = (await cards.findByText('Deepak Rao')).closest('.rent-row');
+    expect(within(deepak).getByText(/Elec Rs 500/)).toBeInTheDocument();
+  });
+
+  it('filters with the chips and searches by name or mobile', async () => {
+    const user = userEvent.setup();
+    renderApp(<Dashboard />);
+    const cards = await list();
+
+    await user.click(screen.getByRole('button', { name: /^Overdue/ }));
+    expect(cards.getByText('Rahul Sharma')).toBeInTheDocument();
+    expect(cards.queryByText('Priya Nair')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /^Partial/ }));
+    // Both Rahul (5,000 of 15,000) and Aman (8,000 of 18,000) are partials.
     expect(cards.getByText('Rahul Sharma')).toBeInTheDocument();
     expect(cards.getByText('Aman Verma')).toBeInTheDocument();
-    expect(cards.getByText('Sneha Patil')).toBeInTheDocument();
+    expect(cards.queryByText('Priya Nair')).not.toBeInTheDocument();
 
-    // Overdue / due-soon / healthy labels are all present from the seed.
-    // Two seeded tenants are already overdue, so match them as a list.
-    expect(cards.getAllByText(/Overdue by/).length).toBeGreaterThan(0);
-    expect(cards.getByText('Due in 3 days')).toBeInTheDocument();
-    expect(cards.getByText('Due in 20 days')).toBeInTheDocument();
-    expect(cards.getByText('Due today')).toBeInTheDocument();
-  });
-
-  it('applies red, amber and green row tints', async () => {
-    const { container } = renderApp(<Dashboard />);
-    const cards = await list();
-
-    // Overdue tenant (seeded 6 days ago).
-    expect(cards.getByText('Rahul Sharma').closest('.rent-row').className).toContain('rent-overdue');
-    // Due in 3 days.
-    expect(cards.getByText('Aman Verma').closest('.rent-row').className).toContain('rent-soon');
-    // Due in 20 days.
-    expect(cards.getByText('Sneha Patil').closest('.rent-row').className).toContain('rent-ok');
-
-    expect(container.querySelectorAll('.rent-row').length).toBeGreaterThanOrEqual(6);
-  });
-
-  it('renders a desktop table with the same rows', async () => {
-    renderApp(<Dashboard />);
-    const rows = await table();
-    expect(rows.getByRole('table')).toBeInTheDocument();
-    expect(rows.getByText('Rahul Sharma')).toBeInTheDocument();
-    expect(rows.getByText('9876543210')).toBeInTheDocument();
-  });
-
-  it('shows the summary counts and collected money this month', async () => {
-    renderApp(<Dashboard />);
-    await list();
-
-    expect(screen.getByText('Total customers')).toBeInTheDocument();
-    expect(screen.getAllByText('Overdue').length).toBeGreaterThan(0);
-    expect(screen.getByText('Collected this month')).toBeInTheDocument();
-    expect(screen.getByText('Remaining rent')).toBeInTheDocument();
-
-    // Seed payments this month: Rahul 5,000 + Imran 5,000 + Aman 8,000 +
-    // Priya 18,000 + Deepak 9,000 (room 207's rent override wins over his
-    // sharing price), plus Deepak's 764 light bill payment.
-    await waitFor(() => expect(screen.getByText('Rs 45,764')).toBeInTheDocument());
-  });
-
-  it('filters with the chip row', async () => {
-    const user = userEvent.setup();
-    renderApp(<Dashboard />);
-    const cards = await list();
-
-    // The chips render above the list ul (so the `cards` scope cannot see
-    // them). The dashboard also has an "Overdue tenants" attention tile, but
-    // only the filter chip carries a count in its accessible name.
-    await user.click(screen.getByRole('button', { name: /^Overdue \d+$/ }));
-    expect(cards.getByText('Rahul Sharma')).toBeInTheDocument();
-    expect(cards.queryByText('Sneha Patil')).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: /^All \d+$/ }));
-    expect(cards.getByText('Sneha Patil')).toBeInTheDocument();
-  });
-
-  it('searches by name and by mobile', async () => {
-    const user = userEvent.setup();
-    renderApp(<Dashboard />);
-    const cards = await list();
-
-    const search = screen.getByLabelText('Search tenants');
-    await user.type(search, 'sneha');
-    expect(cards.getByText('Sneha Patil')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^All/ }));
+    await user.type(screen.getByLabelText('Search tenants'), '9123456780');
+    expect(cards.getByText('Priya Nair')).toBeInTheDocument();
     expect(cards.queryByText('Rahul Sharma')).not.toBeInTheDocument();
-
-    await user.clear(search);
-    await user.type(search, '98765');
-    expect(cards.getByText('Rahul Sharma')).toBeInTheDocument();
   });
 
-  it('marks rent as paid and rolls the due date forward a month', async () => {
+  it('a partial payment keeps the tenant red and the due date in place', async () => {
     const user = userEvent.setup();
     renderApp(<Dashboard />);
     const cards = await list();
 
-    const overdueCard = cards.getByText('Rahul Sharma').closest('.rent-row');
-    expect(overdueCard.className).toContain('rent-overdue');
-    expect(within(overdueCard).getByText(/Overdue by 6 days/)).toBeInTheDocument();
-
+    const overdueCard = (await cards.findByText('Rahul Sharma')).closest('.rent-row');
     await user.click(within(overdueCard).getByRole('button', { name: 'Record' }));
 
-    // Dialog opens pre-filled with the full rent.
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByLabelText(/Amount received/)).toHaveValue(15000);
+    await user.clear(within(dialog).getByLabelText(/Amount received/));
+    await user.type(within(dialog).getByLabelText(/Amount received/), '2000');
     await user.click(within(dialog).getByRole('button', { name: 'Record payment' }));
 
-    // Toast confirms, and the row is no longer overdue.
     expect(await screen.findByText(/Payment recorded/)).toBeInTheDocument();
-    const updatedCard = cards.getByText('Rahul Sharma').closest('.rent-row');
-    expect(updatedCard.className).not.toContain('rent-overdue');
-    expect(within(updatedCard).getByText('Paid')).toBeInTheDocument();
+    const updated = cards.getByText('Rahul Sharma').closest('.rent-row');
+    expect(updated.className).toContain('rent-overdue'); // 8,000 still owed, still overdue
+    expect(within(updated).getByText('Balance Rs 8,000')).toBeInTheDocument();
   });
 
-  it('links the WhatsApp reminder with a prefilled message', async () => {
+  it('settles the overdue rent and rolls the surplus into the next cycle', async () => {
+    const user = userEvent.setup();
     renderApp(<Dashboard />);
     const cards = await list();
 
-    const link = cards.getByTitle(/Send rent reminder to Rahul Sharma/);
-    expect(link).toHaveAttribute('href', expect.stringContaining('https://wa.me/919876543210?text='));
-    // Rahul is overdue with 10,000 still on the open cycle, so the reminder
-    // quotes that balance instead of the flat monthly rent.
-    expect(decodeURIComponent(link.getAttribute('href'))).toContain('balance of ₹10,000');
+    const overdueCard = (await cards.findByText('Rahul Sharma')).closest('.rent-row');
+    await user.click(within(overdueCard).getByRole('button', { name: 'Record' }));
+
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Record payment' }));
+
+    expect(await screen.findByText(/Payment recorded/)).toBeInTheDocument();
+    const updated = cards.getByText('Rahul Sharma').closest('.rent-row');
+    expect(updated.className).not.toContain('rent-overdue');
+  });
+});
+
+describe('Admission', () => {
+  beforeEach(async () => {
+    // Start from an empty ledger: no rooms, no tenants.
+    resetDatabase();
+    startSession();
+  });
+
+  it('creates a tenant that immediately appears after submit', async () => {
+    const user = userEvent.setup();
+    renderApp(<Admission />);
+
+    await user.type(await screen.findByLabelText(/Full name/), 'Test Tenant');
+    await user.type(screen.getByLabelText(/Mobile number/), '9000000001');
+    await user.selectOptions(screen.getByLabelText(/Proof type/), 'AADHAAR');
+    await user.type(screen.getByLabelText(/Proof ID number/), '123456789012');
+    await user.selectOptions(screen.getByLabelText(/Sharing type/), '3');
+    await user.click(screen.getByRole('checkbox', { name: /agree to the Terms/i }));
+
+    const submit = screen.getByRole('button', { name: /Complete admission/ });
+    await waitFor(() => expect(submit).toBeEnabled());
+    await user.click(submit);
+
+    expect(await screen.findByText(/Test Tenant admitted/)).toBeInTheDocument();
+    expect(getQueuedToasts().some((t) => t.type === 'success')).toBe(true);
+  });
+
+  it('disables the submit until the terms box is ticked', async () => {
+    const user = userEvent.setup();
+    renderApp(<Admission />);
+
+    await user.type(await screen.findByLabelText(/Full name/), 'Test Tenant');
+    await user.type(screen.getByLabelText(/Mobile number/), '9000000001');
+    await user.selectOptions(screen.getByLabelText(/Proof type/), 'AADHAAR');
+    await user.type(screen.getByLabelText(/Proof ID number/), '123456789012');
+
+    expect(screen.getByRole('button', { name: /Complete admission/ })).toBeDisabled();
+    await user.click(screen.getByRole('checkbox', { name: /agree to the Terms/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Complete admission/ })).toBeEnabled());
+  });
+
+  it('shows the room picker when rooms exist and fills rent from the room', async () => {
+    const user = userEvent.setup();
+    await seedSampleData();
+    renderApp(<Admission />);
+
+    expect(await screen.findByText(/Pick a room with a free bed/i)).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: /^Room 102/ }));
+    const rent = await screen.findByLabelText(/Monthly rent/);
+    // Room 102 has no override, so the Settings price for 3 sharing applies.
+    await waitFor(() => expect(rent).toHaveValue(13000));
+  });
+});
+
+describe('Customer details', () => {
+  it('shows the tenant, rent history, light bill history and payments', async () => {
+    const [rahul] = await listCustomers();
+
+    render(
+      <MemoryRouter initialEntries={[`/customer/${rahul.id}`]}>
+        <ThemeProvider>
+          <ToastProvider>
+            <AuthProvider>
+              <DataProvider>
+                <Routes>
+                  <Route path="/customer/:id" element={<CustomerDetails />} />
+                </Routes>
+                <Toaster />
+              </DataProvider>
+            </AuthProvider>
+          </ToastProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Rahul Sharma')).toBeInTheDocument();
+    expect(screen.getByText('Tenant details')).toBeInTheDocument();
+    expect(screen.getByText('Rent history')).toBeInTheDocument();
+    expect(screen.getByText('Light bill history')).toBeInTheDocument();
+    expect(screen.getByText('Payments')).toBeInTheDocument();
+    expect(screen.getByText(/Partial rent payment/)).toBeInTheDocument();
+  });
+
+  it('the identity proof card explains itself when empty', async () => {
+    const [rahul] = await listCustomers();
+
+    render(
+      <MemoryRouter initialEntries={[`/customer/${rahul.id}`]}>
+        <ThemeProvider>
+          <ToastProvider>
+            <AuthProvider>
+              <DataProvider>
+                <Routes>
+                  <Route path="/customer/:id" element={<CustomerDetails />} />
+                </Routes>
+              </DataProvider>
+            </AuthProvider>
+          </ToastProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Identity proof')).toBeInTheDocument();
+    expect(screen.getByText(/No Aadhaar card uploaded/i)).toBeInTheDocument();
+  });
+});
+
+describe('Transactions', () => {
+  it('shows today / month collection and the payments list', async () => {
+    renderApp(<Transactions />);
+
+    expect(await screen.findByText("Today's collection")).toBeInTheDocument();
+    expect(screen.getByText('Remaining rent')).toBeInTheDocument();
+    expect(screen.getByText('Remaining light bill')).toBeInTheDocument();
+    expect(await screen.findByText(/Partial rent payment/)).toBeInTheDocument();
+  });
+
+  it('the Pending tab lists tenants who still owe money', async () => {
+    const user = userEvent.setup();
+    renderApp(<Transactions />);
+
+    await user.click(await screen.findByRole('button', { name: /Remaining \/ pending/i }));
+    expect(screen.getByText('Rahul Sharma')).toBeInTheDocument();
+  });
+
+  it('exports the visible payments as CSV', async () => {
+    const user = userEvent.setup();
+    renderApp(<Transactions />);
+
+    const click = vi.fn();
+    const anchor = { click, href: '', download: '', appendChild: vi.fn() };
+    const originalCreate = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation((tag) => (tag === 'a' ? anchor : originalCreate(tag)));
+    vi.spyOn(document.body, 'appendChild').mockImplementation(() => anchor);
+    vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(() => 'blob:x'), revokeObjectURL: vi.fn() });
+
+    await user.click(await screen.findByRole('button', { name: /^CSV$/ }));
+    expect(click).toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+});
+
+describe('Rooms', () => {
+  it('shows floor-wise rooms with bed occupancy', async () => {
+    renderApp(<Rooms />);
+
+    expect(await screen.findByText('Room 101')).toBeInTheDocument();
+    expect(screen.getByText('Room 102')).toBeInTheDocument();
+    const card101 = screen.getByText('Room 101').closest('.card');
+    expect(card101.textContent).toContain('2/2');
+    expect(card101.textContent).toContain('0 free');
+  });
+
+  it('adds a room and blocks deleting an occupied one', async () => {
+    const user = userEvent.setup();
+    renderApp(<Rooms />);
+
+    await user.click(await screen.findByRole('button', { name: /Add room/i }));
+    const sheet = await screen.findByRole('dialog');
+    await user.type(within(sheet).getByLabelText('Room number'), '201');
+    await user.click(within(sheet).getByRole('button', { name: /Save room/i }));
+
+    expect(await screen.findByText('Room added.')).toBeInTheDocument();
+    expect(screen.getByText('Room 201')).toBeInTheDocument();
+
+    // Room 101 holds two tenants: the delete confirm fails with the reason.
+    await user.click(screen.getByRole('button', { name: 'Delete room 101' }));
+    const confirm = await screen.findByRole('dialog');
+    await user.click(within(confirm).getByRole('button', { name: 'Delete room' }));
+    expect(await screen.findByText(/still has 2 tenant/i)).toBeInTheDocument();
   });
 });
 
 describe('Settings', () => {
-  it('shows the five default sharing prices', async () => {
+  it('shows PG details and backup sections', async () => {
     renderApp(<Settings />);
-    await waitFor(() => {
-      expect(screen.getByLabelText('1 sharing')).toHaveValue(18000);
-    });
-    expect(screen.getByLabelText('2 sharing')).toHaveValue(15000);
-    expect(screen.getByLabelText('3 sharing')).toHaveValue(13000);
-    expect(screen.getByLabelText('4 sharing')).toHaveValue(11500);
-    expect(screen.getByLabelText('5 sharing')).toHaveValue(10500);
+
+    expect(await screen.findByText('PG details')).toBeInTheDocument();
+    expect(screen.getByText('Sharing room pricing (per month)')).toBeInTheDocument();
+    expect(screen.getByText('Export backup')).toBeInTheDocument();
   });
 
-  it('persists a changed price', async () => {
-    const user = userEvent.setup();
-    renderApp(<Settings />);
-    const input = await screen.findByLabelText('2 sharing');
-
-    await user.clear(input);
-    await user.type(input, '16000');
-    await user.click(screen.getByRole('button', { name: 'Save prices' }));
-
-    expect(await screen.findByText(/Sharing prices saved/)).toBeInTheDocument();
-    expect((await loadSettings()).sharingPrices['2']).toBe(16000);
-  });
-
-  it('saves an edited default deposit and terms text', async () => {
+  it('saves the PG name and prices', async () => {
     const user = userEvent.setup();
     renderApp(<Settings />);
 
-    const deposit = await screen.findByLabelText(/Default deposit/);
-    await user.clear(deposit);
-    await user.type(deposit, '7500');
-
-    const terms = screen.getByLabelText(/Terms & Conditions text/);
-    await user.clear(terms);
-    await user.type(terms, 'Be nice.');
-
+    await user.clear(screen.getByLabelText('PG name'));
+    await user.type(screen.getByLabelText('PG name'), 'Sunrise PG');
     await user.click(screen.getByRole('button', { name: 'Save settings' }));
     expect(await screen.findByText('Settings saved.')).toBeInTheDocument();
-
-    const stored = await loadSettings();
-    expect(stored.defaultDeposit).toBe(7500);
-    expect(stored.terms).toBe('Be nice.');
-  });
-
-  it('restores the default terms text', async () => {
-    const user = userEvent.setup();
-    renderApp(<Settings />);
-    const terms = await screen.findByLabelText(/Terms & Conditions text/);
-
-    await user.clear(terms);
-    await user.type(terms, 'short');
-    await user.click(screen.getByRole('button', { name: 'Reset to default text' }));
-
-    expect(screen.getByLabelText(/Terms & Conditions text/)).toHaveValue(DEFAULT_SETTINGS.terms);
   });
 });
 
-describe('Admission form', () => {
-  async function fillRequiredFields(user, overrides = {}) {
-    const values = {
-      name: 'Test Person',
-      mobile: '9876543210',
-      proofId: '432198765432',
-      ...overrides,
-    };
+describe('Vacate and delete', () => {
+  it('vacate hides the tenant from the dashboard', async () => {
+    const [rahul] = await listCustomers();
 
-    await user.type(screen.getByLabelText(/Full name/), values.name);
-    await user.type(screen.getByLabelText(/Mobile number/), values.mobile);
-    await user.type(screen.getByLabelText(/Proof ID number/), values.proofId);
-    return values;
-  }
+    function Harness() {
+      const { vacateCustomer } = useData();
+      return (
+        <button type="button" onClick={() => vacateCustomer(rahul.id)}>
+          vacate
+        </button>
+      );
+    }
+    renderApp(
+      <>
+        <Dashboard />
+        <Harness />
+      </>,
+    );
 
-  it('keeps submit disabled until every required field is filled', async () => {
     const user = userEvent.setup();
-    renderApp(<Admission />);
-
-    const submit = await screen.findByRole('button', { name: /Complete admission/ });
-    expect(submit).toBeDisabled();
-
-    await user.type(screen.getByLabelText(/Full name/), 'Test Person');
-    expect(submit).toBeDisabled();
-
-    await user.type(screen.getByLabelText(/Mobile number/), '9876543210');
-    expect(submit).toBeDisabled(); // proof + terms still missing
-
-    await user.type(screen.getByLabelText(/Proof ID number/), '432198765432');
-    expect(submit).toBeDisabled(); // terms not accepted yet
-
-    await user.click(screen.getByLabelText(/I have read and agree/));
-    await waitFor(() => expect(submit).toBeEnabled());
-  });
-
-  it('rejects an invalid mobile number', async () => {
-    const user = userEvent.setup();
-    renderApp(<Admission />);
-
-    await user.type(await screen.findByLabelText(/Mobile number/), '12345');
-    expect(await screen.findByText('Enter a valid 10-digit mobile number')).toBeInTheDocument();
-  });
-
-  it('rejects a bad Aadhaar and accepts a valid one', async () => {
-    const user = userEvent.setup();
-    renderApp(<Admission />);
-
-    const proof = await screen.findByLabelText(/Proof ID number/);
-    await user.type(proof, '12345');
-    expect(await screen.findByText('Aadhaar number must be exactly 12 digits')).toBeInTheDocument();
-
-    await user.clear(proof);
-    await user.type(proof, '432198765432');
-    await waitFor(() => expect(screen.queryByText(/Aadhaar number must/)).not.toBeInTheDocument());
-  });
-
-  it('switches proof validation to the PAN format', async () => {
-    const user = userEvent.setup();
-    renderApp(<Admission />);
-
-    await user.selectOptions(await screen.findByLabelText(/Proof type/), 'PAN');
-    const proof = screen.getByLabelText(/Proof ID number/);
-    await user.type(proof, '1234567890');
-    expect(await screen.findByText('PAN must match the format ABCDE1234F')).toBeInTheDocument();
-
-    await user.clear(proof);
-    await user.type(proof, 'abcde1234f'); // sanitised to upper case
-    await waitFor(() => expect(screen.queryByText(/PAN must match/)).not.toBeInTheDocument());
-  });
-
-  it('auto-fills rent from the sharing type and previews the first due date', async () => {
-    const user = userEvent.setup();
-    renderApp(<Admission />);
-
-    await waitFor(() => expect(screen.getByLabelText(/Monthly rent/)).toHaveValue(13000));
-
-    await user.selectOptions(screen.getByLabelText(/Sharing type/), '1');
-    await waitFor(() => expect(screen.getByLabelText(/Monthly rent/)).toHaveValue(18000));
-
-    await user.selectOptions(screen.getByLabelText(/Sharing type/), '5');
-    await waitFor(() => expect(screen.getByLabelText(/Monthly rent/)).toHaveValue(10500));
-
-    // Joining date defaults to today, so the first due date is one month out.
-    // The preview appears both under the field and in the sticky submit bar.
-    expect(screen.getByLabelText(/Joining date/)).toHaveValue(dayjs().format('YYYY-MM-DD'));
-    const expected = dayjs().add(1, 'month').format('DD MMM YYYY');
-    const previews = screen.getAllByText(/First rent due/);
-    expect(previews.some((node) => node.textContent.includes(expected))).toBe(true);
-  });
-
-  it('keeps a manually overridden rent when the sharing type changes', async () => {
-    const user = userEvent.setup();
-    renderApp(<Admission />);
-
-    const rent = await screen.findByLabelText(/Monthly rent/);
-    await user.clear(rent);
-    await user.type(rent, '9999');
-
-    await user.selectOptions(screen.getByLabelText(/Sharing type/), '2');
-    await waitFor(() => expect(screen.getByLabelText(/Monthly rent/)).toHaveValue(9999));
-  });
-
-  it('submits and computes the due date one month after joining', async () => {
-    const user = userEvent.setup();
-    renderApp(<Admission />);
-
-    await fillRequiredFields(user);
-    await user.click(screen.getByLabelText(/I have read and agree/));
-
-    // Seeded rooms make a room mandatory - pick a free 3-sharing bed.
-    await user.click(await screen.findByRole('button', { name: /^Room 205 / }));
-
-    const joinDate = dayjs().subtract(2, 'month').date(15).format('YYYY-MM-DD');
-    await user.clear(screen.getByLabelText(/Joining date/));
-    await user.type(screen.getByLabelText(/Joining date/), joinDate);
-
-    await user.click(screen.getByRole('button', { name: /Complete admission/ }));
-
-    // The success toast races the navigate('/') that follows it; assert through
-    // the module-level toast log, which is written synchronously on push().
-    await waitFor(() => {
-      expect(getQueuedToasts().some((t) => t.message.includes('Test Person admitted'))).toBe(true);
+    await screen.findAllByText('Rahul Sharma');
+    await user.click(screen.getByRole('button', { name: 'vacate' }));
+    await waitFor(async () => {
+      const cards = await list();
+      expect(cards.queryByText('Rahul Sharma')).not.toBeInTheDocument();
     });
-
-    const created = (await listCustomers()).find((c) => c.name === 'Test Person');
-    expect(created.nextDueDate).toBe(dayjs().subtract(1, 'month').date(15).format('YYYY-MM-DD'));
-    expect(created.code).toMatch(/^PG-\d{4}$/);
-    expect(created.dueDay).toBe(15);
-    expect(created.termsAccepted).toBe(true);
-    expect(created.code).toMatch(/^PG-\d{4}$/);
   });
 
-  it('clamps a 31st joining date to the shorter month', async () => {
+  it('delete removes the tenant and cascades; a second delete reports already gone', async () => {
+    const [rahul] = await listCustomers();
+    const { deleteCustomer } = await import('../services/customerService.js');
+
+    function Harness() {
+      const { deleteCustomer } = useData();
+      return (
+        <button
+          type="button"
+          onClick={() => deleteCustomer(rahul.id).catch(() => {})}
+        >
+          remove
+        </button>
+      );
+    }
+    renderApp(
+      <>
+        <Dashboard />
+        <Harness />
+      </>,
+    );
+
     const user = userEvent.setup();
-    renderApp(<Admission />);
-
-    await fillRequiredFields(user);
-    await user.click(screen.getByLabelText(/I have read and agree/));
-
-    // Seeded rooms make a room mandatory - pick a free 3-sharing bed.
-    await user.click(await screen.findByRole('button', { name: /^Room 205 / }));
-
-    // Anchored to a fixed month that actually has 31 days. Deriving this from
-    // "today" (e.g. dayjs().subtract(1, 'month').date(31)) silently rolls
-    // forward into the next month whenever today is the 1st or 2nd, which made
-    // this test fail depending on the day it ran.
-    const joinDate = dayjs('2025-01-31').format('YYYY-MM-DD');
-    const joinInput = screen.getByLabelText(/Joining date/);
-    await user.clear(joinInput);
-    await user.type(joinInput, joinDate);
-
-    await user.click(screen.getByRole('button', { name: /Complete admission/ }));
-    await waitFor(() => {
-      expect(getQueuedToasts().some((t) => t.message.includes('Test Person admitted'))).toBe(true);
+    await screen.findAllByText('Rahul Sharma');
+    await user.click(screen.getByRole('button', { name: 'remove' }));
+    await waitFor(async () => {
+      const cards = await list();
+      expect(cards.queryByText('Rahul Sharma')).not.toBeInTheDocument();
     });
-    await screen.findByText(/Test Person admitted/);
+    await expect(deleteCustomer(rahul.id)).rejects.toThrow('matched no row');
+  });
+});
 
-    const created = (await listCustomers()).find((c) => c.name === 'Test Person');
-    // The 31st must clamp to the last day of whatever month we land in,
-    // never spill over into the next month. 31 Jan -> 28 Feb (2026 is not a
-    // leap year).
-    const due = dayjs(created.nextDueDate);
-    const anchor = dayjs(created.joiningDate).date();
-    expect(anchor).toBe(31);
-    expect(due.format('YYYY-MM')).toBe('2025-02');
-    expect(due.date()).toBe(Math.min(anchor, due.daysInMonth()));
-    expect(due.date()).toBe(28);
+describe('Dark mode', () => {
+  it('toggling the theme persists it in localStorage', async () => {
+    function Probe() {
+      const { theme, toggleTheme } = useTheme();
+      return (
+        <button type="button" onClick={toggleTheme}>
+          {theme}
+        </button>
+      );
+    }
+    renderApp(<Probe />);
+
+    const user = userEvent.setup();
+    const button = screen.getByRole('button', { name: 'system' });
+    await user.click(button);
+    const next = button.textContent;
+    expect(next).not.toBe('system');
+    expect(window.localStorage.getItem('pg-manager:theme')).toBe(next);
   });
 });

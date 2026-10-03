@@ -20,15 +20,11 @@ export const TX_LIGHT_BILL = 'LIGHT_BILL';
 // Written by the checkout RPC. It is money going *out* (a deposit refund), not
 // a payment against a cycle, so it never reduces what a tenant owes.
 export const TX_REFUND = 'REFUND';
-// Optional admin-confirmed late fee line (migration 004). Flows through the
-// same ledger maths as rent so it counts in collections and reduces balance.
-export const TX_LATE_FEE = 'LATE_FEE';
 
 export const TX_TYPES = [
   { value: 'all', label: 'All' },
   { value: TX_RENT, label: 'Rent' },
   { value: TX_LIGHT_BILL, label: 'Light bill' },
-  { value: TX_LATE_FEE, label: 'Late fee' },
   { value: TX_REFUND, label: 'Deposit refund' },
 ];
 
@@ -418,4 +414,48 @@ export function getOutstandingTotals({ cycles = [], lightBills = [] } = {}) {
     rent: money(cycles.reduce((sum, cycle) => sum + getRemaining(cycle), 0)),
     lightBill: money(lightBills.reduce((sum, bill) => sum + getRemaining(bill), 0)),
   };
+}
+
+
+// ---------------------------------------------------------- derived helpers
+
+/**
+ * The cycle each tenant is currently being billed for: the newest one that is
+ * not yet settled, falling back to the newest overall (a tenant who overpaid
+ * last month can legitimately have every cycle settled).
+ *
+ * The input is sorted explicitly because lists arrive oldest-first, and any
+ * "first entry wins" shortcut over an unsorted list ends up pinning a tenant's
+ * balance to their oldest, months-stale cycle.
+ */
+export function openCycleByCustomer(cycles = []) {
+  // Newest first, so the first entry seen per tenant in a pass is the newest.
+  const byNewest = (a, b) =>
+    String(b.dueDate ?? '').localeCompare(String(a.dueDate ?? '')) ||
+    String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? ''));
+
+  const sorted = [...cycles].sort(byNewest);
+  const map = new Map();
+  // Pass 1: the newest unsettled cycle per tenant.
+  for (const cycle of sorted) {
+    if (cycle.status !== STATUS_PAID && !map.has(cycle.customerId)) {
+      map.set(cycle.customerId, cycle);
+    }
+  }
+  // Pass 2: tenants with nothing outstanding keep their newest cycle.
+  for (const cycle of sorted) {
+    if (!map.has(cycle.customerId)) map.set(cycle.customerId, cycle);
+  }
+  return map;
+}
+
+/** Unpaid electricity per tenant, summed across their bills. */
+export function billsRemainingByCustomer(lightBills = []) {
+  const map = new Map();
+  for (const bill of lightBills) {
+    const remaining = getRemaining(bill);
+    if (remaining <= 0) continue;
+    map.set(bill.customerId, (map.get(bill.customerId) ?? 0) + remaining);
+  }
+  return map;
 }

@@ -1,115 +1,74 @@
-import { getSettings as readSettingsRow, saveSettingsRow as writeSettingsRow } from './supabase.js';
+import { TABLES, listRows, buildWriteRow, insertRow, updateRow } from './supabase.js';
 
 /**
- * Admin-configurable pricing + policy text - now stored in Supabase.
- * The admission form reads these as its defaults; every field stays overridable
- * per customer.
+ * The one settings row: PG name, UPI id, sharing prices, default deposit,
+ * Terms text and the WhatsApp reminder template. Kept in Supabase so every
+ * signed-in admin sees the same values.
  */
 
+export const SHARING_TYPES = [1, 2, 3, 4, 5];
+
 export const DEFAULT_TERMS = `1. Rent Payment
-• Monthly rent must be paid on or before the 10th of every month.
-• Rent is to be paid in advance for the coming month.
-• A late fee of Rs 50 per day applies after the due date (max Rs 500).
+• Monthly rent must be paid on or before the due date shown on the dashboard.
 • Payment modes accepted: Cash, UPI and Bank transfer.
 
 2. Notice Period
-• One month's prior written notice is required before leaving the PG.
-• The notice must be given to the warden on paper or by email.
+• One month's prior notice is required before leaving the PG.
 • Rent is non-refundable for the notice month.
 
 3. Security Deposit
 • A refundable deposit is collected at the time of joining.
-• The deposit is refunded after vacating, after deducting dues, damage charges
-  and the cost of replacing keys/ID cards.
-• Deposit refund is completed within 15 days of vacating the room.
+• The deposit is refunded after vacating, after deducting dues and damage charges.
 
 4. House Rules
-• No smoking, alcohol, tobacco or illegal substances inside the premises.
-• No drugs or prohibited substances are permitted at any time.
-• Visitors are allowed only between 8:00 AM and 8:00 PM, and must be registered
-  with the warden. Visitors are not allowed after 8:00 PM.
-• House is kept locked between 10:00 PM and 5:30 AM. Late entry is not allowed.
-• Guests are strictly not allowed inside the rooms.
+• No smoking, alcohol or illegal substances inside the premises.
+• Visitors are allowed only between 8:00 AM and 8:00 PM.
+• Keep your room and the common areas clean.`;
 
-5. Electricity & Water
-• Electricity charges are billed separately as per meter reading and are
-  payable along with the rent.
-• Water charges are shared equally among all residents.
-• Switching off fans, lights and appliances when not in use is mandatory.
-
-6. Damage & Maintenance
-• Residents are responsible for any damage caused to furniture, fittings or
-  building property and will be charged the repair/replacement cost.
-• Rooms must be returned in the same condition as handed over.
-• Maintenance complaints must be reported to the warden immediately.
-
-7. General
-• Rooms allotted are subject to availability; the management reserves the right
-  to shift a resident if required.
-• PG rules are subject to change with one month's notice.
-• Residents must keep their rooms clean and hygienic.`;
+export const DEFAULT_WHATSAPP_TEMPLATE =
+  'Hello {name}, your rent of {amount} was due on {due}. Kindly pay at your earliest. - {pg}';
 
 export const DEFAULT_SETTINGS = {
-  sharingPrices: {
-    1: 18000,
-    2: 15000,
-    3: 13000,
-    4: 11500,
-    5: 10500,
-  },
-  defaultDeposit: 5000,
-  rentDueDayOfMonth: 10,
-  terms: DEFAULT_TERMS,
-  pgName: 'Sunrise Paying Guest',
-  ownerName: 'PG Manager',
-  ownerMobile: '',
-  currencyNote: '',
-  // UPI deep links / QR codes (receipts + reminders).
+  pgName: 'My PG',
   upiId: '',
-  // Late fee: 'none' | 'fixed' (₹/day) | 'percent' (% of balance/day), applied
-  // after the grace period, optionally capped. The admin confirms each fee.
-  lateFeeMode: 'none',
-  lateFeeValue: 0,
-  lateFeeGraceDays: 0,
-  lateFeeMax: null,
-  // Mess (optional).
-  messEnabled: false,
-  messCharges: 0,
+  sharingPrices: { 1: 18000, 2: 15000, 3: 13000, 4: 11500, 5: 10500 },
+  defaultDeposit: 5000,
+  terms: DEFAULT_TERMS,
+  whatsappTemplate: DEFAULT_WHATSAPP_TEMPLATE,
 };
 
+function normalize(raw = {}) {
+  return {
+    pgName: raw.pgName ?? DEFAULT_SETTINGS.pgName,
+    upiId: raw.upiId ?? '',
+    sharingPrices: { ...DEFAULT_SETTINGS.sharingPrices, ...(raw.sharingPrices ?? {}) },
+    defaultDeposit: Number(raw.defaultDeposit) || 0,
+    terms: raw.terms ?? DEFAULT_TERMS,
+    whatsappTemplate: raw.whatsappTemplate ?? DEFAULT_WHATSAPP_TEMPLATE,
+  };
+}
+
+/** The settings row, or the defaults before the first save. */
 export async function loadSettings() {
-  try {
-    const stored = await readSettingsRow();
-    if (!stored) return { ...DEFAULT_SETTINGS };
-    return {
-      ...DEFAULT_SETTINGS,
-      ...stored,
-      sharingPrices: { ...DEFAULT_SETTINGS.sharingPrices, ...(stored.sharingPrices || {}) },
-      lateFeeMax: stored.lateFeeMax ?? null,
-      messEnabled: Boolean(stored.messEnabled),
-    };
-  } catch {
-    return { ...DEFAULT_SETTINGS };
-  }
+  const rows = await listRows(TABLES.settings);
+  return normalize(rows[0] ?? {});
 }
 
 export async function saveSettings(settings) {
-  const merged = {
-    ...settings,
-    sharingPrices: { ...settings.sharingPrices },
-  };
-  await writeSettingsRow(merged);
-  return merged;
-}
-
-export async function resetSettings() {
-  await writeSettingsRow({ ...DEFAULT_SETTINGS });
-  return { ...DEFAULT_SETTINGS };
+  const clean = normalize(settings);
+  const rows = await listRows(TABLES.settings);
+  const existing = rows[0];
+  const payload = buildWriteRow(TABLES.settings, { ...clean, updatedAt: new Date().toISOString() });
+  // Update the row in place when it exists, otherwise insert the first one.
+  if (existing?.id) {
+    await updateRow(TABLES.settings, existing.id, payload);
+  } else {
+    await insertRow(TABLES.settings, payload);
+  }
+  return clean;
 }
 
 export function getRentForSharing(settings, sharingType) {
   const price = settings?.sharingPrices?.[String(sharingType)];
   return Number.isFinite(Number(price)) ? Number(price) : 0;
 }
-
-export const SHARING_TYPES = [1, 2, 3, 4, 5];

@@ -1,14 +1,15 @@
+import { useData } from '../context/DataContext.jsx';
 import { buildReminderMessage, waLink } from '../utils/whatsapp.js';
 import { MessageIcon } from './icons.jsx';
 
 /**
- * "Send reminder" opens WhatsApp with a prefilled, plain-text rent reminder.
- * `remaining` (an open-cycle balance) is folded into the message when given.
- * The number is normalised to international form (no +, spaces or dashes)
- * because wa.me rejects anything else.
+ * "Remind" opens WhatsApp with a prefilled rent reminder. The message comes
+ * from the Settings template ({name}, {amount}, {due}, {pg}); `remaining`
+ * (the open-cycle balance) is used when there is one.
  */
 export default function ReminderButton({ customer, remaining = null, className = 'btn-secondary', label = 'Remind', compact = false }) {
-  const href = waLink(customer.mobile, buildReminderMessage(customer, remaining));
+  const { settings } = useData();
+  const href = waLink(customer.mobile, buildReminderMessage(customer, remaining, settings.whatsappTemplate, settings.pgName));
   if (!href) return null;
 
   return (

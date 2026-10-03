@@ -3,8 +3,7 @@ import Modal from './Modal.jsx';
 import { AmountField } from './AmountField.jsx';
 import { formatDate, formatRupees, toNumber } from '../utils/format.js';
 import { todayISO } from '../utils/dateLogic.js';
-import { getRemaining, describeRentPlan } from '../utils/ledger.js';
-import { useData } from '../context/DataContext.jsx';
+import { getRemaining, describeRentPlan, planRentPayment } from '../utils/ledger.js';
 
 const MODES = [
   { value: 'cash', label: 'Cash' },
@@ -23,7 +22,6 @@ const MODES = [
  * The parent decides which service to call from the exact same form values.
  */
 export default function PaymentDialog({ open, target, onClose, onConfirm, busy }) {
-  const { previewRentPayment } = useData();
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState(todayISO());
   const [mode, setMode] = useState('cash');
@@ -68,16 +66,19 @@ export default function PaymentDialog({ open, target, onClose, onConfirm, busy }
       setPreview(null);
       return;
     }
-    const handle = setTimeout(async () => {
-      try {
-        const plan = await previewRentPayment({ customerId: customer.id, amount: numeric });
-        setPreview(plan);
-      } catch {
-        setPreview(null);
-      }
+    const handle = setTimeout(() => {
+      setPreview(
+        planRentPayment({
+          cycle,
+          amount: numeric,
+          dueDay: customer.dueDay,
+          nextRentAmount: customer.rentAmount,
+          advanceCredit: customer.advanceCredit,
+        }),
+      );
     }, 250);
     return () => clearTimeout(handle);
-  }, [isRent, customer, cycle, amount, previewRentPayment]);
+  }, [isRent, customer, cycle, amount]);
 
   if (!open || !customer) return null;
 

@@ -24,7 +24,18 @@ export function waLink(phone, message) {
  * `remaining` is an optional explicit balance (e.g. an open cycle's unpaid
  * remainder) - when given, the message shows it instead of the full rent.
  */
-export function buildReminderMessage(customer, remaining = null) {
+/** The Settings template's placeholders, filled for one tenant. */
+function fillTemplate(template, customer, remaining, pgName) {
+  const amount = remaining != null && remaining > 0 ? remaining : customer.rentAmount;
+  return String(template || '')
+    .replaceAll('{name}', String(customer.name || '').split(' ')[0] || 'there')
+    .replaceAll('{amount}', formatCurrency(amount))
+    .replaceAll('{due}', formatDate(customer.nextDueDate))
+    .replaceAll('{pg}', pgName || 'PG management');
+}
+
+export function buildReminderMessage(customer, remaining = null, template = '', pgName = '') {
+  if (template) return fillTemplate(template, customer, remaining, pgName);
   const name = String(customer.name || '').split(' ')[0] || 'there';
   const due = formatDate(customer.nextDueDate);
   const room = customer.roomNo ? ` (Room ${customer.roomNo}${customer.bedNo ? `-${customer.bedNo}` : ''})` : '';

@@ -3,12 +3,11 @@ import { test, expect } from '@playwright/test';
 /**
  * Smoke test: every route opens, and nothing logs an app-level error.
  *
- * A render-time throw used to blank the whole app, and the two reports this
- * suite exists for (Global Search, Assets) were exactly that. The ErrorBoundary
- * now contains a throw to its own route, which means a broken page could pass a
- * "did the heading render" check by showing the error screen instead. So every
- * test asserts on page errors and console errors as well as on content, and
- * treats the boundary's "Something went wrong" copy as a failure.
+ * A render-time throw used to blank the whole app. The ErrorBoundary contains
+ * a throw to its own route, which means a broken page could pass a "did the
+ * heading render" check by showing the error screen instead. So every test
+ * asserts on page errors and console errors as well as on content, and treats
+ * the boundary's "Something went wrong" copy as a failure.
  *
  * Two kinds of noise are separated rather than ignored:
  *
@@ -24,19 +23,12 @@ import { test, expect } from '@playwright/test';
 const EMAIL = process.env.SMOKE_EMAIL || '';
 const PASSWORD = process.env.SMOKE_PASSWORD || '';
 
-/** Every route the app defines, plus a path that must hit the 404 screen. */
+/** Every route the app defines. */
 const ROUTES = [
-  { path: '/', heading: 'Dashboard' },
-  { path: '/admission', heading: /admit|new tenant/i },
-  { path: '/customers', heading: /tenants/i },
+  { path: '/', heading: /dashboard|hello|good morning|good afternoon|good evening/i },
+  { path: '/admission', heading: /new admission|admit/i },
   { path: '/rooms', heading: 'Rooms' },
   { path: '/transactions', heading: /transactions|payments/i },
-  { path: '/expenses', heading: /expenses/i },
-  { path: '/operations', heading: 'Operations' },
-  { path: '/reports', heading: 'Reports' },
-  { path: '/meters', heading: /meter|electric/i },
-  { path: '/mess', heading: /mess|menu/i },
-  { path: '/assets', heading: 'Assets' },
   { path: '/settings', heading: 'Settings' },
 ];
 
@@ -83,14 +75,14 @@ async function signIn(page) {
   await page.getByLabel('Email').fill(EMAIL);
   await page.getByLabel('Password').fill(PASSWORD);
   await page.getByRole('button', { name: /sign in|create account/i }).click();
-  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('heading', { name: /dashboard|hello/i }).first()).toBeVisible({ timeout: 20_000 });
 }
 
 test.afterAll(() => {
   if (backendErrors.size) {
     console.warn(
       '\nThe app logged these backend failures (missing tables, not app bugs).\n' +
-        'Run supabase/repair.sql in the Supabase SQL editor to create them:\n' +
+        'Run supabase/schema.sql in the Supabase SQL editor to create them:\n' +
         [...backendErrors].join('\n'),
     );
   }
@@ -140,66 +132,21 @@ test.describe('smoke', () => {
       errors.length = 0;
       await page.goto(route.path);
       // The heading proves the page rendered rather than the boundary's retry
-      // screen; the heading copy is checked separately for assets below.
+      // screen.
       await expect(page.getByText('Something went wrong')).toHaveCount(0, { timeout: 15_000 });
       await expect(page.getByRole('heading', { name: route.heading }).first()).toBeVisible({ timeout: 15_000 });
       expect(errors.filter((e) => !REACT_ERROR_NOUNCE.test(e)), `${route.path}: ${errors.join('\n')}`).toEqual([]);
     }
   });
 
-  test('global search opens and survives typing', async ({ page }) => {
+  test('the signed-in header shows the account and sign out', async ({ page }) => {
     test.skip(!EMAIL || !PASSWORD, 'set SMOKE_EMAIL and SMOKE_PASSWORD to run this');
     const errors = [];
     watchForErrors(page, errors);
 
     await signIn(page);
 
-    await page.getByRole('button', { name: 'Search', exact: true }).click();
-    const input = page.getByLabel('Search everything');
-    await expect(input).toBeVisible();
-
-    // An empty query must not throw, and a query with no matches must say so
-    // rather than crashing - this is the regression that was reported.
-    await expect(page.getByText(/start typing to search/i)).toBeVisible();
-    await input.fill('zzzznotathing');
-    await expect(page.getByText(/no matches for/i)).toBeVisible();
-    await input.fill('a');
-    await expect(input).toHaveValue('a');
-
-    expect(errors, errors.join('\n')).toEqual([]);
-  });
-
-  test('assets opens and lists or explains itself', async ({ page }) => {
-    test.skip(!EMAIL || !PASSWORD, 'set SMOKE_EMAIL and SMOKE_PASSWORD to run this');
-    const errors = [];
-    watchForErrors(page, errors);
-
-    await signIn(page);
-    await page.goto('/assets');
-
-    await expect(page.getByRole('heading', { name: 'Assets' })).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Something went wrong')).toHaveCount(0);
-
-    // A real inventory, a deliberate empty state, or the "table is missing"
-    // error with a Retry button. What must never happen is a blank page or the
-    // boundary's retry screen - that was the reported crash.
-    const hasContent =
-      (await page.getByRole('button', { name: /add asset/i }).count()) > 0 ||
-      (await page.getByRole('button', { name: /try again/i }).count()) > 0;
-    expect(hasContent, 'assets page rendered no inventory, empty state or error state').toBe(true);
-
-    expect(errors, errors.join('\n')).toEqual([]);
-  });
-
-  test('the account menu shows the signed-in user', async ({ page }) => {
-    test.skip(!EMAIL || !PASSWORD, 'set SMOKE_EMAIL and SMOKE_PASSWORD to run this');
-    const errors = [];
-    watchForErrors(page, errors);
-
-    await signIn(page);
-    await page.getByRole('button', { name: 'Account menu' }).click();
-
-    await expect(page.getByRole('button', { name: /sign out/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /sign out/i }).first()).toBeVisible();
     expect(errors, errors.join('\n')).toEqual([]);
   });
 });

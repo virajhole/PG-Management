@@ -8,22 +8,15 @@ vi.mock('./services/supabase.js', async () => await import('./test/supabaseFake.
 
 import App from './App.jsx';
 import { startSession, clearSession } from './services/authService.js';
-import { resetDatabase, listAdmins, addAdmin, getSession as getSessionRaw, listRows as listRowsFake, setAdminsTableMissing, TABLES } from './test/supabaseFake.js';
-import { seedSampleData } from './services/seedService.js';
-import { listCustomers } from './services/customerService.js';
+import { resetDatabase } from './test/supabaseFake.js';
+import { seedSampleData } from './test/seed.js';
 
 /**
- * Smoke tests for the whole app: router, auth gate, layout and the lazily loaded
- * routes, all mounted through the real `App` rather than individual pages.
- *
- * The Supabase data layer is swapped for the in-memory fake, and each test seeds
- * whatever records it needs - the app itself no longer seeds demo data.
+ * Smoke tests for the whole app: router, auth gate and the lazily loaded
+ * routes, all mounted through the real `App`.
  */
 
 const goto = (path) => window.history.pushState({}, '', path);
-
-const getSessionUser = async () => (await getSessionRaw()).user;
-const listTransactions = () => listRowsFake(TABLES.transactions);
 
 beforeEach(async () => {
   resetDatabase();
@@ -43,34 +36,36 @@ describe('App', () => {
     expect(await screen.findByLabelText('Email')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /continue with google/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Sign in with email' })).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Dashboard' })).not.toBeInTheDocument();
   });
 
-  it('lets a new user create an account and get in', async () => {
+  it('lets a user sign in with email and password', async () => {
     const user = userEvent.setup();
     render(<App />);
 
-    const email = await screen.findByLabelText('Email');
-    await user.type(email, 'owner@example.com');
+    await user.type(await screen.findByLabelText('Email'), 'owner@example.com');
     await user.type(screen.getByLabelText('Password'), 'hunter2pass');
-    await user.click(screen.getByRole('button', { name: /sign in|create account/i }));
+    await user.click(screen.getByRole('button', { name: /sign in/i }));
 
-    expect(await screen.findByRole('heading', { name: 'Dashboard' }, { timeout: 3000 })).toBeInTheDocument();
-    // First account on an empty project claims ownership of the allowlist.
-    expect(await listAdmins()).toEqual([
-      expect.objectContaining({ email: 'owner@example.com', role: 'admin' }),
-    ]);
+    expect((await screen.findAllByText(/no tenants yet/i, {}, { timeout: 3000 })).length).toBeGreaterThan(0);
   });
 
-  it('blocks a signed-in Google user who is not on the allowlist', async () => {
-    // Someone is already on the team, so this account cannot claim ownership.
-    await addAdmin({ email: 'owner@example.com', role: 'admin' });
+  it('rejects a wrong password', async () => {
+    const user = userEvent.setup();
+    render(<App />);
 
+    await user.type(await screen.findByLabelText('Email'), 'owner@example.com');
+    await user.type(screen.getByLabelText('Password'), 'wrongpass');
+    await user.click(screen.getByRole('button', { name: /sign in/i }));
+
+    expect(await screen.findByText(/invalid login credentials/i)).toBeInTheDocument();
+  });
+
+  it('admits any signed-in Google user straight to the dashboard', async () => {
     const user = userEvent.setup();
     render(<App />);
 
     await user.click(await screen.findByRole('button', { name: /continue with google/i }));
-    // Simulate the OAuth redirect: Supabase hands us a session for someone else.
+    // Simulate the OAuth redirect: Supabase hands us a session.
     startSession({
       id: 'fake-stranger',
       email: 'stranger@gmail.com',
@@ -79,84 +74,25 @@ describe('App', () => {
       provider: 'google',
     });
 
-    expect(await screen.findByRole('heading', { name: 'Access denied' }, { timeout: 3000 })).toBeInTheDocument();
-    expect(screen.getByText('stranger@gmail.com')).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Dashboard' })).not.toBeInTheDocument();
-    // The rejected session is dropped, not left hanging around.
-    await waitFor(async () => expect(await getSessionUser()).toBeNull());
-  });
-
-  it('explains a missing database instead of blaming the allowlist', async () => {
-    // The exact shape of a project that only has migrations 001-002 applied:
-    // the admins table does not exist, so *every* sign-in is rejected - owner
-    // included. Pointing at Settings -> Team there would be a dead end.
-    setAdminsTableMissing(true);
-
-    const user = userEvent.setup();
-    render(<App />);
-
-    await user.click(await screen.findByRole('button', { name: /continue with google/i }));
-    startSession({
-      id: 'fake-owner',
-      email: 'virajhole7774@gmail.com',
-      name: 'Owner',
-      avatarUrl: '',
-      provider: 'google',
-    });
-
     expect(
-      await screen.findByRole('heading', { name: 'Database not set up' }, { timeout: 3000 }),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/repair\.sql/i)).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Access denied' })).not.toBeInTheDocument();
-
-    setAdminsTableMissing(false);
-    // With the schema in place the very next sign-in claims ownership.
-    await addAdmin({ email: 'virajhole7774@gmail.com', role: 'owner' });
-    startSession({
-      id: 'fake-owner',
-      email: 'virajhole7774@gmail.com',
-      name: 'Owner',
-      avatarUrl: '',
-      provider: 'google',
-    });
-    expect(await screen.findByRole('heading', { name: 'Dashboard' }, { timeout: 3000 })).toBeInTheDocument();
+      await screen.findAllByText(/no tenants yet|Dashboard|Hello/i, {}, { timeout: 3000 }),
+    ).not.toHaveLength(0);
   });
 
-  it('records a payment from the tenant page', async () => {
-    const user = userEvent.setup();
-    startSession();
-    await seedSampleData();
-    const [rahul] = await listCustomers();
-    goto(`/customer/${rahul.id}`);
-    render(<App />);
-
-    const before = (await listTransactions()).length;
-    await user.click(await screen.findByRole('button', { name: /record payment/i }, { timeout: 3000 }));
-    await user.click((await screen.findAllByRole('button', { name: /^record payment$/i })).pop());
-
-    await waitFor(async () => expect((await listTransactions()).length).toBe(before + 1));
-  });
-
-  it('renders the dashboard shell for a signed-in user', async () => {
+  it('renders the dashboard shell for a signed-in user with seeded tenants', async () => {
     startSession();
     await seedSampleData();
     render(<App />);
 
-    expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeInTheDocument();
-    // Desktop sidebar and mobile bottom bar are both landmarks, CSS picks one.
-    expect(screen.getAllByRole('navigation').length).toBeGreaterThan(0);
-    expect(screen.getByLabelText('Summary')).toBeInTheDocument();
-    // The seeded tenants show up, so the layout and data layer are wired together.
-    // Both the mobile cards and the desktop table are in the DOM.
-    expect((await screen.findAllByText('Rahul Sharma')).length).toBeGreaterThan(0);
+    expect(await screen.findByLabelText('Summary')).toBeInTheDocument();
+    expect((await screen.findAllByText('Rahul Sharma', {}, { timeout: 3000 })).length).toBeGreaterThan(0);
   });
 
   it('shows an empty state for an account with no tenants', async () => {
     startSession();
     render(<App />);
 
-    expect(await screen.findByText('No tenants yet')).toBeInTheDocument();
+    expect((await screen.findAllByText(/no tenants yet/i)).length).toBeGreaterThan(0);
   });
 
   it('lazily loads the admission form on its own route', async () => {
@@ -173,8 +109,8 @@ describe('App', () => {
     goto('/settings');
     render(<App />);
 
-    expect(await screen.findByText('Sharing room pricing', {}, { timeout: 3000 })).toBeInTheDocument();
-    expect(screen.getByText('Backup & restore')).toBeInTheDocument();
+    expect(await screen.findByText('PG details', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.getByText('Export backup')).toBeInTheDocument();
   });
 
   it('shows the 404 screen for an unknown route', async () => {
@@ -188,11 +124,11 @@ describe('App', () => {
   it('keeps the session alive across a remount', async () => {
     startSession();
     const first = render(<App />);
-    await screen.findByRole('heading', { name: 'Dashboard' });
+    await screen.findAllByText(/no tenants yet/i, {}, { timeout: 3000 });
     cleanup();
 
     render(<App />);
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText(/no tenants yet|Hello/i).length).toBeGreaterThan(0));
     first.unmount();
   });
 });

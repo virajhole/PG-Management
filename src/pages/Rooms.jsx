@@ -8,7 +8,6 @@ import {
   ChevronDownIcon,
   EditIcon,
   TrashIcon,
-  BoltIcon,
   CheckIcon,
 } from '../components/icons.jsx';
 import { roomService } from '../services/index.js';
@@ -28,7 +27,6 @@ const FILTERS = [
   { value: 'vacant', label: 'Has vacancy' },
   { value: 'empty', label: 'Fully vacant' },
   { value: 'full', label: 'Full' },
-  { value: 'ac', label: 'AC' },
 ];
 
 const emptyForm = {
@@ -36,10 +34,7 @@ const emptyForm = {
   roomNo: '',
   sharingType: 2,
   monthlyRent: '',
-  hasAc: false,
-  hasAttachedBathroom: false,
   notes: '',
-  isActive: true,
 };
 
 function StatCard({ label, value, tone = '' }) {
@@ -96,12 +91,6 @@ function RoomCard({ room, onEdit, onDelete, rent }) {
                   ? 'Full'
                   : 'Partial'}
             </span>
-            {room.hasAc && (
-              <span className="chip border-brand-200 bg-brand-50 text-brand-700 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-200">
-                <BoltIcon className="size-3" />
-                AC
-              </span>
-            )}
           </div>
           <p className="mt-0.5 text-xs text-ink-subtle">
             Floor {room.floor} &middot; {room.sharingType}-sharing &middot; {formatRupees(rent)}/month
@@ -214,24 +203,7 @@ function RoomForm({ initial, onSubmit, onCancel, busy }) {
       </label>
 
       <div className="space-y-2">
-        <label className="flex items-center gap-3">
-          <input
-            type="checkbox"
-            className="size-5 accent-brand-600"
-            checked={form.hasAc}
-            onChange={(e) => set({ hasAc: e.target.checked })}
-          />
-          <span className="text-sm text-ink">Air conditioned</span>
-        </label>
-        <label className="flex items-center gap-3">
-          <input
-            type="checkbox"
-            className="size-5 accent-brand-600"
-            checked={form.hasAttachedBathroom}
-            onChange={(e) => set({ hasAttachedBathroom: e.target.checked })}
-          />
-          <span className="text-sm text-ink">Attached bathroom</span>
-        </label>
+
       </div>
 
       <label className="block">
@@ -307,8 +279,6 @@ export default function Rooms() {
               return room.occupied === 0;
             case 'full':
               return room.vacant === 0;
-            case 'ac':
-              return room.hasAc;
             default:
               return true;
           }
@@ -334,10 +304,7 @@ export default function Rooms() {
         sharingType: Number(form.sharingType),
         // An empty rent override must stay null so the room follows Settings.
         monthlyRent: form.monthlyRent === '' ? null : Number(form.monthlyRent),
-        hasAc: form.hasAc,
-        hasAttachedBathroom: form.hasAttachedBathroom,
         notes: form.notes,
-        isActive: form.isActive,
       };
       if (editing) await roomService.updateRoom(editing.id, payload);
       else await roomService.createRoom(payload);

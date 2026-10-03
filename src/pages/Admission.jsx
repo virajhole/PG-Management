@@ -10,7 +10,6 @@ import { useData } from '../context/DataContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
 import { customerSchema, PROOF_TYPES, sanitiseAadhaar, sanitisePan, sanitiseMobile, getProofHint } from '../utils/validation.js';
 import { getRentForSharing, SHARING_TYPES, roomService } from '../services/index.js';
-import { nextCustomerCode } from '../services/customerService.js';
 import { formatCurrency, formatDate } from '../utils/format.js';
 import { getNextDueDate, todayISO, dayjs } from '../utils/dateLogic.js';
 
@@ -103,7 +102,7 @@ function RoomPicker({ rooms, selectedRoomId, bedNo, onSelect, onBedChange, prefi
 }
 
 export default function Admission() {
-  const { settings, customers, createCustomer, setCustomerImage, refresh } = useData();
+  const { settings, rooms, roomsStatus, refreshRooms, createCustomer, setCustomerImage } = useData();
   const toast = useToast();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -112,8 +111,6 @@ export default function Admission() {
   // Once the admin types their own rent we stop overwriting it on sharing change.
   const rentOverridden = useRef(false);
   const [submitting, setSubmitting] = useState(false);
-  const [rooms, setRooms] = useState([]);
-  const [roomsStatus, setRoomsStatus] = useState('loading');
   const preselected = useRef(false);
 
   const {
@@ -160,22 +157,8 @@ export default function Admission() {
   const terms = settings.terms || '';
 
   useEffect(() => {
-    let cancelled = false;
-    roomService
-      .listRooms()
-      .then((list) => {
-        if (!cancelled) {
-          setRooms(list);
-          setRoomsStatus('ready');
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setRoomsStatus('error');
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    refreshRooms();
+  }, [refreshRooms]);
 
   const pickRoom = useCallback(
     (room) => {
@@ -230,7 +213,10 @@ export default function Admission() {
     if (price) setValue('rentAmount', price, { shouldValidate: true, shouldDirty: true });
   }, [sharingType, selectedRoom, settings, setValue]);
 
+  // 'idle' only happens before the first rooms read resolves, so the form
+  // treats it exactly like 'loading' instead of flashing "no rooms".
   const roomsRequired = roomsStatus === 'ready' && rooms.length > 0;
+  const roomsLoading = roomsStatus === 'loading' || roomsStatus === 'idle';
 
   const previewDueDate = useMemo(() => {
     if (!joiningDate) return null;
@@ -257,29 +243,20 @@ export default function Admission() {
         sharingType: Number(values.sharingType),
         rentAmount: Number(values.rentAmount) || 0,
         depositAmount: Number(values.depositAmount) || 0,
-        // The RPC path skips createCustomer, so the code / due-anchor math that
-        // the plain path gets for free must ride along in the payload. The
-        // admit RPC coalesces all three from it.
-        code: nextCustomerCode(customers),
         dueDay,
         nextDueDate: getNextDueDate(values.joiningDate, 1, dueDay),
         proofImage: undefined,
         photo: undefined,
       };
 
-      // With rooms on file the bed is assigned inside the locked RPC; without
-      // them there is nothing to reserve, so the plain create path is correct.
-      const customer = roomsRequired
-        ? await roomService
-            .admitCustomer(payload, values.roomId, values.bedNo)
-            .then((result) => ({ id: result.customerId }))
-        : await createCustomer(payload);
+      // One admission path for both cases: createCustomer routes through the
+      // same create_customer RPC that reserves the bed and writes the first
+      // rent cycle, and the context call refreshes the ledger afterwards.
+      const customer = await createCustomer(payload);
 
       // Images are written once the customer (and its id) exists.
       if (values.proofImage) await setCustomerImage(customer.id, 'proof', values.proofImage);
       if (values.photo) await setCustomerImage(customer.id, 'photo', values.photo);
-
-      await refresh();
 
       reset();
       preselected.current = true;
@@ -465,7 +442,7 @@ export default function Admission() {
         <Section
           title="Room & rent"
           description={
-            roomsStatus === 'loading'
+            roomsLoading
               ? 'Loading rooms...'
               : roomsRequired
                 ? 'Pick a room with a free bed. Only rooms matching the sharing type are listed.'

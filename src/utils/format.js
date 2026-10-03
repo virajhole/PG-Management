@@ -41,6 +41,14 @@ export function toNumber(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+/** "2025-06" -> "Jun 2025", for light-bill month labels. */
+export function formatBillMonth(key) {
+  const [year, month] = String(key || '').split('-');
+  if (!year || !month) return String(key || '');
+  const names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${names[Number(month) - 1]} ${year}`;
+}
+
 /** Compact one/two letter initials for the avatar fallback. */
 export function getInitials(name) {
   return String(name || '')
