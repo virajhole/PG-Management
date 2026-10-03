@@ -545,9 +545,9 @@ export default function Admission() {
           <label
             className={`mt-3 flex cursor-pointer items-start gap-3 rounded-xl border p-3.5 transition ${
               errors.termsAccepted
-                ? 'border-red-300 bg-red-50'
+                ? 'border-red-300 bg-red-50 dark:border-red-900 dark:bg-red-950/60'
                 : touchedFields.termsAccepted && !errors.termsAccepted
-                  ? 'border-brand-300 bg-brand-50'
+                  ? 'border-brand-300 bg-brand-50 dark:border-brand-800 dark:bg-brand-950/60'
                   : 'border-line bg-raised hover:border-line-strong'
             }`}
           >
@@ -565,7 +565,8 @@ export default function Admission() {
         </Section>
 
         {/* -------------------------------------------------------- submit */}
-        <div className="sticky bottom-20 z-10 -mx-4 border-t border-line bg-raised/95 px-4 py-3 backdrop-blur lg:bottom-0 lg:mx-0 lg:rounded-2xl lg:border">
+        {/* A normal block, not a sticky bar: it scrolls with the form. */}
+        <div className="rounded-2xl border border-line bg-raised px-4 py-3">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0 text-xs text-ink-subtle">
               {previewDueDate ? (

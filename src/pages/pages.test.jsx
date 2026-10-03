@@ -268,7 +268,8 @@ describe('Transactions', () => {
     expect(await screen.findByText("Today's collection")).toBeInTheDocument();
     expect(screen.getByText('Remaining rent')).toBeInTheDocument();
     expect(screen.getByText('Remaining light bill')).toBeInTheDocument();
-    expect(await screen.findByText(/Partial rent payment/)).toBeInTheDocument();
+    // Both seeded partial payments (Rahul's and Aman's) belong in the list.
+    expect(await screen.findAllByText(/Partial rent payment/)).toHaveLength(2);
   });
 
   it('the Pending tab lists tenants who still owe money', async () => {

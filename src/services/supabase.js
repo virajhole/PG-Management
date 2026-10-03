@@ -46,11 +46,19 @@ const RPC_PARAMS = {
 
 const toSnake = (value) => String(value).replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
 
+// Database-generated columns: an explicit null would override the column
+// default (gen_random_uuid / now()) and violate the NOT NULL constraint, so
+// they are omitted and Postgres fills them in.
+const DB_GENERATED = new Set(['id', 'createdAt', 'updatedAt']);
+
 /** Pick a camelCase object's supported keys, renamed for Postgres. */
 export function buildWriteRow(table, row) {
   const out = {};
   for (const key of COLUMNS[table] ?? []) {
-    if (key in row) out[toSnake(key)] = row[key];
+    if (!(key in row)) continue;
+    if (DB_GENERATED.has(key) && (row[key] === null || row[key] === undefined)) continue;
+    if (row[key] === undefined) continue;
+    out[toSnake(key)] = row[key];
   }
   return out;
 }

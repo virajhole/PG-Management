@@ -98,22 +98,24 @@
   color-scheme: light;
 }
 
+/* Dark is a premium black: near-OLED page background, subtly lifted cards,
+   and the indigo brand accents left to pop against it. */
 .dark {
-  --surface: #151a2e;
-  --surface-muted: #1a2038;
-  --raised: #1b2138;
-  --sunken: #0b0f1f;
-  --line: #2a3151;
-  --line-strong: #3d4568;
-  --ink: #eef1fb;
-  --ink-muted: #c0c7dd;
-  --ink-subtle: #8d97b5;
-  --ink-inverse: #0b0f1f;
+  --surface: #0a0a0d;
+  --surface-muted: #0f0f13;
+  --raised: #131318;
+  --sunken: #060608;
+  --line: #232329;
+  --line-strong: #35353f;
+  --ink: #f4f4f9;
+  --ink-muted: #c7c7d3;
+  --ink-subtle: #8f8fa0;
+  --ink-inverse: #060608;
 
   --hero-from: #4f46e5;
   --hero-via: #6d28d9;
   --hero-to: #0f766e;
-  --header-bg: rgb(15 19 38 / 0.72);
+  --header-bg: rgb(6 6 8 / 0.75);
 
   color-scheme: dark;
 }

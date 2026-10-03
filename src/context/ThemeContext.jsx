@@ -44,7 +44,7 @@ function systemTheme() {
  */
 const THEME_COLORS = {
   light: '#eef1f7',
-  dark: '#0b0f1f',
+  dark: '#060608',
 };
 
 export function applyTheme(theme) {
